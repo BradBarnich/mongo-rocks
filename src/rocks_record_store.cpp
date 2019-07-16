@@ -862,7 +862,8 @@ namespace mongo {
         }
     }
 
-    Status RocksRecordStore::oplogDiskLocRegister(OperationContext* opCtx, const Timestamp& opTime) {
+    Status RocksRecordStore::oplogDiskLocRegister(OperationContext* opCtx, const Timestamp& opTime,
+                                                  bool orderedCommit) {
         invariant(_isOplog);
         StatusWith<RecordId> record = oploghack::keyForOptime(opTime);
         if (record.isOK()) {
