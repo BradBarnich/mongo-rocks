@@ -151,8 +151,7 @@ namespace mongo {
                                                   RecordId* idsOut);
 
         virtual Status updateRecord(OperationContext* opCtx, const RecordId& oldLocation,
-                                    const char* data, int len, bool enforceQuota,
-                                    UpdateNotifier* notifier);
+                                    const char* data, int len, bool enforceQuota);
 
         virtual bool updateWithDamagesSupported() const;
 
@@ -169,10 +168,7 @@ namespace mongo {
         virtual bool compactSupported() const { return true; }
         virtual bool compactsInPlace() const { return true; }
 
-        virtual Status compact( OperationContext* opCtx,
-                                RecordStoreCompactAdaptor* adaptor,
-                                const CompactOptions* options,
-                                CompactStats* stats );
+        virtual Status compact( OperationContext* opCtx );
 
         virtual Status validate( OperationContext* opCtx,
                                  ValidateCmdLevel level,
@@ -312,7 +308,7 @@ namespace mongo {
         std::shared_ptr<CappedVisibilityManager> _cappedVisibilityManager;
 
         std::string _ident;
-        AtomicUInt64 _nextIdNum;
+        AtomicWord<std::uint64_t> _nextIdNum;
         std::atomic<long long> _dataSize;
         std::atomic<long long> _numRecords;
 
