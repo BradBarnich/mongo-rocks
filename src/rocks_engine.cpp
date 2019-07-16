@@ -57,7 +57,7 @@
 #include "mongo/db/index/index_descriptor.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/operation_context.h"
-#include "mongo/db/server_parameters.h"
+#include "mongo/idl/server_parameter.h"
 #include "mongo/db/storage/journal_listener.h"
 #include "mongo/stdx/memory.h"
 #include "mongo/util/background.h"
@@ -121,7 +121,8 @@ namespace mongo {
         // ServerParameter to limit concurrency, to prevent thousands of threads running
         // concurrent searches and thus blocking the entire DB.
         class RocksTicketServerParameter : public ServerParameter {
-            MONGO_DISALLOW_COPYING(RocksTicketServerParameter);
+            RocksTicketServerParameter(const RocksTicketServerParameter&) = delete;
+            RocksTicketServerParameter& operator=(const RocksTicketServerParameter&) = delete;
 
         public:
             RocksTicketServerParameter(TicketHolder* holder, const std::string& name)

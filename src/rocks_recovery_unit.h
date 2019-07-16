@@ -39,7 +39,6 @@
 #include <rocksdb/write_batch.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
 
-#include "mongo/base/disallow_copying.h"
 #include "mongo/base/owned_pointer_vector.h"
 #include "mongo/db/record_id.h"
 #include "mongo/db/storage/recovery_unit.h"
@@ -76,7 +75,8 @@ namespace mongo {
     class OperationContext;
 
     class RocksRecoveryUnit : public RecoveryUnit {
-        MONGO_DISALLOW_COPYING(RocksRecoveryUnit);
+        RocksRecoveryUnit(const RocksRecoveryUnit&) = delete;
+        RocksRecoveryUnit& operator=(const RocksRecoveryUnit&) = delete;
     public:
         RocksRecoveryUnit(RocksTransactionEngine* transactionEngine,
                           RocksSnapshotManager* snapshotManager, rocksdb::DB* db,

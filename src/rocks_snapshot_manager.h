@@ -30,7 +30,6 @@
 
 #include <rocksdb/db.h>
 
-#include "mongo/base/disallow_copying.h"
 #include "mongo/db/storage/snapshot_manager.h"
 
 #include "mongo/stdx/mutex.h"
@@ -42,7 +41,8 @@ namespace mongo {
 class RocksRecoveryUnit;
 
 class RocksSnapshotManager final : public SnapshotManager {
-    MONGO_DISALLOW_COPYING(RocksSnapshotManager);
+    RocksSnapshotManager(const RocksSnapshotManager&) = delete;
+    RocksSnapshotManager& operator=(const RocksSnapshotManager&) = delete;
 
 public:
     struct SnapshotHolder {

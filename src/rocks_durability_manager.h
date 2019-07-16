@@ -30,8 +30,6 @@
 
 #pragma once
 
-#include "mongo/base/disallow_copying.h"
-
 namespace rocksdb {
     class DB;
 }
@@ -41,7 +39,8 @@ namespace mongo {
     class JournalListener;
 
     class RocksDurabilityManager {
-        MONGO_DISALLOW_COPYING(RocksDurabilityManager);
+        RocksDurabilityManager(const RocksDurabilityManager&) = delete;
+        RocksDurabilityManager& operator=(const RocksDurabilityManager&) = delete;
 
     public:
         RocksDurabilityManager(rocksdb::DB* db, bool durable);

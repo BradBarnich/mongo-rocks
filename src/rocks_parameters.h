@@ -26,8 +26,7 @@
 *    it in the license file.
 */
 
-#include "mongo/base/disallow_copying.h"
-#include "mongo/db/server_parameters.h"
+#include "mongo/idl/server_parameter.h"
 
 #include "rocks_engine.h"
 
@@ -36,7 +35,8 @@ namespace mongo {
     // To dynamically configure RocksDB's rate limit, run
     // db.adminCommand({setParameter:1, rocksdbRuntimeConfigMaxWriteMBPerSec:30})
     class RocksRateLimiterServerParameter : public ServerParameter {
-        MONGO_DISALLOW_COPYING(RocksRateLimiterServerParameter);
+        RocksRateLimiterServerParameter(const RocksRateLimiterServerParameter&) = delete;
+        RocksRateLimiterServerParameter& operator=(const RocksRateLimiterServerParameter&) = delete;
 
     public:
         RocksRateLimiterServerParameter(RocksEngine* engine);
@@ -55,7 +55,8 @@ namespace mongo {
     // The directory needs to be an absolute path. It should not exist -- it will be created
     // automatically.
     class RocksBackupServerParameter : public ServerParameter {
-        MONGO_DISALLOW_COPYING(RocksBackupServerParameter);
+        RocksBackupServerParameter(const RocksBackupServerParameter&) = delete;
+        RocksBackupServerParameter& operator=(const RocksBackupServerParameter&) = delete;
 
     public:
         RocksBackupServerParameter(RocksEngine* engine);
@@ -71,7 +72,8 @@ namespace mongo {
     // To compact entire RocksDB instance, call:
     // db.adminCommand({setParameter:1, rocksdbCompact: 1})
     class RocksCompactServerParameter : public ServerParameter {
-        MONGO_DISALLOW_COPYING(RocksCompactServerParameter);
+        RocksCompactServerParameter(const RocksCompactServerParameter&) = delete;
+        RocksCompactServerParameter& operator=(const RocksCompactServerParameter&) = delete;
 
     public:
         RocksCompactServerParameter(RocksEngine* engine);
@@ -87,7 +89,8 @@ namespace mongo {
     // To compact entire RocksDB instance, call:
     // db.adminCommand({setParameter:1, rocksdbRuntimeConfigCacheSizeGB: 10})
     class RocksCacheSizeParameter : public ServerParameter {
-        MONGO_DISALLOW_COPYING(RocksCacheSizeParameter);
+        RocksCacheSizeParameter(const RocksCacheSizeParameter&) = delete;
+        RocksCacheSizeParameter& operator=(const RocksCacheSizeParameter&) = delete;
 
     public:
         RocksCacheSizeParameter(RocksEngine* engine);
@@ -105,7 +108,8 @@ namespace mongo {
     // To dynamically change an option, call:
     // db.adminCommand({setParameter:1, "rocksdbOptions": "someoption=1; someoption2=3"})
     class RocksOptionsParameter : public ServerParameter {
-        MONGO_DISALLOW_COPYING(RocksOptionsParameter);
+        RocksOptionsParameter(const RocksOptionsParameter&) = delete;
+        RocksOptionsParameter& operator=(const RocksOptionsParameter&) = delete;
 
     public:
         RocksOptionsParameter(RocksEngine* engine);

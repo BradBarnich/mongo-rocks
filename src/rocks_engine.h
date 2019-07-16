@@ -41,7 +41,6 @@
 #include <rocksdb/status.h>
 #include <rocksdb/statistics.h>
 
-#include "mongo/base/disallow_copying.h"
 #include "mongo/bson/ordering.h"
 #include "mongo/db/storage/kv/kv_engine.h"
 #include "mongo/util/string_map.h"
@@ -71,7 +70,8 @@ namespace mongo {
     class JournalListener;
 
     class RocksEngine final : public KVEngine {
-        MONGO_DISALLOW_COPYING( RocksEngine );
+        RocksEngine(const RocksEngine&) = delete;
+        RocksEngine& operator=(const RocksEngine&) = delete;
     public:
         RocksEngine(const std::string& path, bool durable, int formatVersion, bool readOnly);
         virtual ~RocksEngine();

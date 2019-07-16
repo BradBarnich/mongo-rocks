@@ -48,7 +48,8 @@ namespace mongo {
     class RocksRecoveryUnit;
 
     class RocksIndexBase : public SortedDataInterface {
-        MONGO_DISALLOW_COPYING(RocksIndexBase);
+        RocksIndexBase(const RocksIndexBase&) = delete;
+        RocksIndexBase& operator=(const RocksIndexBase&) = delete;
 
     public:
         RocksIndexBase(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order,
@@ -102,14 +103,14 @@ namespace mongo {
                          const BSONObj& config, std::string collectionNamespace,
                          std::string indexName, bool partial = false);
 
-        virtual Status insert(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
+        virtual StatusWith<SpecialFormatInserted> insert(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
                               bool dupsAllowed);
         virtual void unindex(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
                              bool dupsAllowed);
         virtual std::unique_ptr<SortedDataInterface::Cursor> newCursor(OperationContext* opCtx,
                                                                        bool forward) const;
 
-        virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key, const RecordId& loc);
+        virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key);
 
         virtual SortedDataBuilderInterface* getBulkBuilder(OperationContext* opCtx,
                                                            bool dupsAllowed) override;
@@ -124,13 +125,13 @@ namespace mongo {
         RocksStandardIndex(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order,
                            const BSONObj& config);
 
-        virtual Status insert(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
+        virtual StatusWith<SpecialFormatInserted> insert(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
                               bool dupsAllowed);
         virtual void unindex(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
                              bool dupsAllowed);
         virtual std::unique_ptr<SortedDataInterface::Cursor> newCursor(OperationContext* opCtx,
                                                                        bool forward) const;
-        virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key, const RecordId& loc) {
+        virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key) {
             // dupKeyCheck shouldn't be called for non-unique indexes
             invariant(false);
         }

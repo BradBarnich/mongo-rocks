@@ -48,7 +48,7 @@
 #include "mongo/db/storage/index_entry_comparison.h"
 #include "mongo/stdx/memory.h"
 #include "mongo/util/log.h"
-#include "mongo/util/mongoutils/str.h"
+#include "mongo/util/str.h"
 
 #include "rocks_engine.h"
 #include "rocks_record_store.h"
@@ -94,7 +94,7 @@ namespace mongo {
 
         Status checkKeySize(const BSONObj& key) {
             if (key.objsize() >= kTempKeyMaxSize) {
-                string msg = mongoutils::str::stream()
+                string msg = str::stream()
                              << "RocksIndex::insert: key too large to index, failing " << ' '
                              << key.objsize() << ' ' << key;
                 return Status(ErrorCodes::KeyTooLong, msg);
@@ -826,8 +826,7 @@ namespace mongo {
                                                     _keyStringVersion, _indexName);
     }
 
-    Status RocksUniqueIndex::dupKeyCheck(OperationContext* opCtx, const BSONObj& key,
-                                         const RecordId& loc) {
+    Status RocksUniqueIndex::dupKeyCheck(OperationContext* opCtx, const BSONObj& key) {
         KeyString encodedKey(_keyStringVersion, key, _order);
         std::string prefixedKey(_makePrefixedKey(_prefix, encodedKey));
 
@@ -844,14 +843,17 @@ namespace mongo {
         // If the key exists, check if we already have this loc at this key. If so, we don't
         // consider that to be a dup.
         BufReader br(value.data(), value.size());
+        int records = 0;
         while (br.remaining()) {
-            if (KeyString::decodeRecordId(&br) == loc) {
-                return Status::OK();
-            }
+            KeyString::decodeRecordId(&br);
+            records++;
 
-            KeyString::TypeBits::fromBuffer(_keyStringVersion,
-                                            &br);  // Just calling this to advance reader.
+            KeyString::TypeBits::fromBuffer(_keyStringVersion, &br);  // Just calling this to advance reader.
         }
+        if(records <= 1) {
+            return Status::OK();
+        }
+
         return Status(ErrorCodes::DuplicateKey, dupKeyError(key, _collectionNamespace, _indexName));
     }
 
