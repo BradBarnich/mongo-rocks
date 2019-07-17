@@ -801,7 +801,8 @@ namespace mongo {
         std::string endString(_makePrefixedKey(_prefix, RecordId::max()));
         rocksdb::Slice beginRange(beginString);
         rocksdb::Slice endRange(endString);
-        return rocksToMongoStatus(_db->CompactRange(&beginRange, &endRange));
+        rocksdb::CompactRangeOptions options;
+        return rocksToMongoStatus(_db->CompactRange(options, &beginRange, &endRange));
     }
 
     Status RocksRecordStore::validate( OperationContext* opCtx,

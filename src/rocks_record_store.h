@@ -206,6 +206,10 @@ namespace mongo {
         int64_t cappedDeleteAsNeeded_inlock(OperationContext* opCtx, const RecordId& justInserted);
         stdx::timed_mutex& cappedDeleterMutex() { return _cappedDeleterMutex; }
 
+        const std::string& getIdent() const override {
+            return _ident;
+        }
+
         static rocksdb::Comparator* newRocksCollectionComparator();
 
         class CappedInsertChange;

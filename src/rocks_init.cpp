@@ -65,12 +65,12 @@ namespace mongo {
                 auto engine = new RocksEngine(params.dbpath + "/db", params.dur, formatVersion,
                                               params.readOnly);
                 // Intentionally leaked.
-                auto leaked __attribute__((unused)) = new RocksServerStatusSection(engine);
-                auto leaked2 __attribute__((unused)) = new RocksRateLimiterServerParameter(engine);
-                auto leaked3 __attribute__((unused)) = new RocksBackupServerParameter(engine);
-                auto leaked4 __attribute__((unused)) = new RocksCompactServerParameter(engine);
-                auto leaked5 __attribute__((unused)) = new RocksCacheSizeParameter(engine);
-                auto leaked6 __attribute__((unused)) = new RocksOptionsParameter(engine);
+                new RocksServerStatusSection(engine);
+                new RocksRateLimiterServerParameter(engine);
+                new RocksBackupServerParameter(engine);
+                new RocksCompactServerParameter(engine);
+                new RocksCacheSizeParameter(engine);
+                new RocksOptionsParameter(engine);
 
                 // Print options.
                 rocksGlobalOptions.printOptions();

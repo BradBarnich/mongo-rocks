@@ -344,8 +344,10 @@ namespace mongo {
         return std::move(recordStore);
     }
 
-    Status RocksEngine::createSortedDataInterface(OperationContext* opCtx, StringData ident,
-                                                  const IndexDescriptor* desc) {
+    Status RocksEngine::createSortedDataInterface(OperationContext* opCtx,
+                                     const CollectionOptions& collOptions,
+                                     StringData ident,
+                                     const IndexDescriptor* desc) {
         BSONObjBuilder configBuilder;
         // let index add its own config things
         RocksIndexBase::generateConfig(&configBuilder, _formatVersion, desc->version());

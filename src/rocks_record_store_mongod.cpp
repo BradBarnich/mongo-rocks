@@ -73,7 +73,7 @@ namespace mongo {
              * @return Number of documents deleted.
              */
             int64_t _deleteExcessDocuments() {
-                if (!getGlobalServiceContext()->getGlobalStorageEngine()) {
+                if (!getGlobalServiceContext()->getStorageEngine()) {
                     LOG(1) << "no global storage engine yet";
                     return 0;
                 }
@@ -88,7 +88,7 @@ namespace mongo {
                         return 0;
                     }
 
-                    Lock::CollectionLock collectionLock(opCtx->lockState(), _ns.ns(), MODE_IX);
+                    Lock::CollectionLock collectionLock(opCtx.get(), _ns, MODE_IX);
                     Collection* collection = db->getCollection(opCtx.get(), _ns);
                     if (!collection) {
                         LOG(2) << "no collection " << _ns;

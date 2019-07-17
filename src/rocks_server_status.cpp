@@ -110,7 +110,7 @@ namespace mongo {
 
     BSONObj RocksServerStatusSection::generateSection(OperationContext* opCtx,
                                                       const BSONElement& configElement) const {
-        Lock::GlobalLock lk(opCtx, LockMode::MODE_IS, Milliseconds::max());
+        Lock::GlobalLock lk(opCtx, LockMode::MODE_IS);
 
         BSONObjBuilder bob;
 
