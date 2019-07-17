@@ -56,7 +56,7 @@
 #include "mongo/util/background.h"
 #include "mongo/util/concurrency/idle_thread_block.h"
 #include "mongo/util/log.h"
-#include "mongo/util/mongoutils/str.h"
+#include "mongo/util/str.h"
 
 #include "rocks_counter_manager.h"
 #include "rocks_durability_manager.h"
@@ -77,7 +77,7 @@ namespace mongo {
                            SortedRecordIds::iterator it)
             : _cappedVisibilityManager(cappedVisibilityManager), _rs(rs), _it(it) {}
 
-        virtual void commit() { _cappedVisibilityManager->dealtWithCappedRecord(_it, true); }
+        virtual void commit(boost::optional<Timestamp> commitTime) { _cappedVisibilityManager->dealtWithCappedRecord(_it, true); }
 
         virtual void rollback() {
             _cappedVisibilityManager->dealtWithCappedRecord(_it, false);
@@ -500,9 +500,9 @@ namespace mongo {
         RocksRecoveryUnit* realRecoveryUnit =
             checked_cast<RocksRecoveryUnit*>(opCtx->releaseRecoveryUnit());
         invariant(realRecoveryUnit);
-        OperationContext::RecoveryUnitState const realRUstate =
-            opCtx->setRecoveryUnit(realRecoveryUnit->newRocksRecoveryUnit(),
-                                   OperationContext::kNotInUnitOfWork);
+        WriteUnitOfWork::RecoveryUnitState const realRUstate =
+            opCtx->setRecoveryUnit(std::unique_ptr<RecoveryUnit>(realRecoveryUnit->newRocksRecoveryUnit()),
+                                   WriteUnitOfWork::kNotInUnitOfWork);
 
         int64_t dataSize = _dataSize.load() + realRecoveryUnit->getDeltaCounter(_dataSizeKey);
         int64_t numRecords = _numRecords.load() + realRecoveryUnit->getDeltaCounter(_numRecordsKey);
@@ -611,19 +611,19 @@ namespace mongo {
             }
         }
         catch ( const WriteConflictException& ) {
-            delete opCtx->releaseRecoveryUnit();
-            opCtx->setRecoveryUnit(realRecoveryUnit, realRUstate);
+            opCtx->releaseRecoveryUnit();
+            opCtx->setRecoveryUnit(std::unique_ptr<RecoveryUnit>(realRecoveryUnit), realRUstate);
             log() << "got conflict truncating capped, ignoring";
             return 0;
         }
         catch ( ... ) {
-            delete opCtx->releaseRecoveryUnit();
-            opCtx->setRecoveryUnit(realRecoveryUnit, realRUstate);
+            opCtx->releaseRecoveryUnit();
+            opCtx->setRecoveryUnit(std::unique_ptr<RecoveryUnit>(realRecoveryUnit), realRUstate);
             throw;
         }
 
-        delete opCtx->releaseRecoveryUnit();
-        opCtx->setRecoveryUnit(realRecoveryUnit, realRUstate);
+        opCtx->releaseRecoveryUnit();
+        opCtx->setRecoveryUnit(std::unique_ptr<RecoveryUnit>(realRecoveryUnit), realRUstate);
 
         if (_isOplog) {
             if ((_oplogSinceLastCompaction.minutes() >= kOplogCompactEveryMins) ||
@@ -726,8 +726,7 @@ namespace mongo {
     }
 
     Status RocksRecordStore::updateRecord(OperationContext* opCtx, const RecordId& loc,
-                                          const char* data, int len, bool enforceQuota,
-                                          UpdateNotifier* notifier) {
+                                          const char* data, int len) {
         std::string key(_makePrefixedKey(_prefix, loc));
 
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit( opCtx );
@@ -774,7 +773,7 @@ namespace mongo {
             // If we already have a snapshot we don't know what it can see, unless we know no
             // one else could be writing (because we hold an exclusive lock).
             if (ru->hasSnapshot() && !opCtx->lockState()->isNoop() &&
-                !opCtx->lockState()->isCollectionLockedForMode(_ns, MODE_X)) {
+                !opCtx->lockState()->isCollectionLockedForMode(NamespaceString(_ns), MODE_X)) {
                 throw WriteConflictException();
             }
             ru->setOplogReadTill(_cappedVisibilityManager->oplogStartHack());
@@ -797,10 +796,7 @@ namespace mongo {
         return rocksToMongoStatus(iterator->status());
     }
 
-    Status RocksRecordStore::compact( OperationContext* opCtx,
-                                      RecordStoreCompactAdaptor* adaptor,
-                                      const CompactOptions* options,
-                                      CompactStats* stats ) {
+    Status RocksRecordStore::compact( OperationContext* opCtx ) {
         std::string beginString(_makePrefixedKey(_prefix, RecordId()));
         std::string endString(_makePrefixedKey(_prefix, RecordId::max()));
         rocksdb::Slice beginRange(beginString);

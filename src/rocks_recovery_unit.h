@@ -74,7 +74,7 @@ namespace mongo {
 
     class OperationContext;
 
-    class RocksRecoveryUnit : public RecoveryUnit {
+    class RocksRecoveryUnit final : public RecoveryUnit {
         RocksRecoveryUnit(const RocksRecoveryUnit&) = delete;
         RocksRecoveryUnit& operator=(const RocksRecoveryUnit&) = delete;
     public:
@@ -93,15 +93,14 @@ namespace mongo {
 
         virtual void abandonSnapshot();
 
-        Status obtainMajorityCommittedSnapshot() final;
+        Status obtainMajorityCommittedSnapshot() override;
 
-        boost::optional<Timestamp> getPointInTimeReadTimestamp() const final;
+        boost::optional<Timestamp> getPointInTimeReadTimestamp() const;
 
         virtual void* writingPtr(void* data, size_t len) { invariant(!"don't call writingPtr"); }
 
         virtual void registerChange(Change* change);
 
-        virtual void setRollbackWritesDisabled() override {}
         virtual void setOrderedCommit(bool orderedCommit) override {};
 
         virtual SnapshotId getSnapshotId() const;

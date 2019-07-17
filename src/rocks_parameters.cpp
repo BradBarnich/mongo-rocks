@@ -34,7 +34,7 @@
 
 #include "mongo/logger/parse_log_component_settings.h"
 #include "mongo/util/log.h"
-#include "mongo/util/mongoutils/str.h"
+#include "mongo/util/str.h"
 
 #include <rocksdb/status.h>
 #include <rocksdb/cache.h>

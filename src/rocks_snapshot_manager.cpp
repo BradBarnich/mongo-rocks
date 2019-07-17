@@ -47,6 +47,19 @@ namespace mongo {
         _committedSnapshot = nameU64;
     }
 
+    void RocksSnapshotManager::setLocalSnapshot(const Timestamp& timestamp) {
+    stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
+    if (timestamp.isNull())
+        _localSnapshot = boost::none;
+    else
+        _localSnapshot = timestamp;
+}
+
+    boost::optional<Timestamp> RocksSnapshotManager::getLocalSnapshot() {
+        stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
+        return _localSnapshot;
+    }
+
     void RocksSnapshotManager::dropAllSnapshots() {
         stdx::lock_guard<stdx::mutex> lock(_mutex);
         _committedSnapshot = boost::none;

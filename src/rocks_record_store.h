@@ -151,7 +151,7 @@ namespace mongo {
                                                   RecordId* idsOut);
 
         virtual Status updateRecord(OperationContext* opCtx, const RecordId& oldLocation,
-                                    const char* data, int len, bool enforceQuota);
+                                    const char* data, int len);
 
         virtual bool updateWithDamagesSupported() const;
 

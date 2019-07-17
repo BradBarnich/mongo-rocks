@@ -31,10 +31,12 @@
 
 #include "mongo/base/init.h"
 #include "mongo/db/service_context.h"
-#include "mongo/db/storage/storage_options.h"
-#include "mongo/db/storage/kv/kv_storage_engine.h"
+#include "mongo/db/storage/storage_engine_impl.h"
+#include "mongo/db/storage/storage_engine_init.h"
+#include "mongo/db/storage/storage_engine_lock_file.h"
 #include "mongo/db/storage/storage_engine_metadata.h"
-#include "mongo/util/mongoutils/str.h"
+#include "mongo/db/storage/storage_options.h"
+#include "mongo/util/str.h"
 
 #include "rocks_global_options.h"
 #include "rocks_engine.h"
@@ -51,7 +53,7 @@ namespace mongo {
             virtual ~RocksFactory(){}
             virtual StorageEngine* create(const StorageGlobalParams& params,
                                           const StorageEngineLockFile* lockFile) const {
-                KVStorageEngineOptions options;
+                StorageEngineOptions options;
                 options.directoryPerDB = params.directoryperdb;
                 options.forRepair = params.repair;
                 // Mongo keeps some files in params.dbpath. To avoid collision, put out files under
@@ -73,7 +75,7 @@ namespace mongo {
                 // Print options.
                 rocksGlobalOptions.printOptions();
 
-                return new KVStorageEngine(engine, options);
+                return new StorageEngineImpl(engine, options);
             }
 
             virtual StringData getCanonicalName() const {
@@ -143,11 +145,8 @@ namespace mongo {
         };
     } // namespace
 
-    MONGO_INITIALIZER_WITH_PREREQUISITES(RocksEngineInit,
-                                         ("SetGlobalEnvironment"))
-                                         (InitializerContext* context) {
-        getGlobalServiceContext()->registerStorageEngine(kRocksDBEngineName, new RocksFactory());
-        return Status::OK();
-    }
-
+    ServiceContext::ConstructorActionRegisterer registerRocksDb(
+    "RocksDbEngineInit", [](ServiceContext* service) {
+        registerStorageEngine(service, std::make_unique<RocksFactory>());
+    });
 }

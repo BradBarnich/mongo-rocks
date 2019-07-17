@@ -89,8 +89,10 @@ namespace mongo {
                                             StringData ident,
                                             const CollectionOptions& options) override;
 
-        virtual Status createSortedDataInterface(OperationContext* opCtx, StringData ident,
-                                                 const IndexDescriptor* desc) override;
+        virtual Status createSortedDataInterface(OperationContext* opCtx,
+                                     const CollectionOptions& collOptions,
+                                     StringData ident,
+                                     const IndexDescriptor* desc) override;
 
         virtual SortedDataInterface* getSortedDataInterface(OperationContext* opCtx,
                                                             StringData ident,

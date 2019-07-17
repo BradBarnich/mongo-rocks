@@ -58,7 +58,7 @@ namespace mongo {
         // SnapshotIds need to be globally unique, as they are used in a WorkingSetMember to
         // determine if documents changed, but a different recovery unit may be used across a getMore,
         // so there is a chance the snapshot ID will be reused.
-        AtomicUInt64 nextSnapshotId{1};
+        AtomicWord<uint64_t> nextSnapshotId{1};
 
         logger::LogSeverity kSlowTransactionSeverity = logger::LogSeverity::Debug(1);
 

@@ -60,6 +60,8 @@ public:
     }
 
     void setCommittedSnapshot(const Timestamp& ts) final;
+    void setLocalSnapshot(const Timestamp& timestamp) final;
+    boost::optional<Timestamp> getLocalSnapshot() final;
     void dropAllSnapshots() final;
 
     //
@@ -74,6 +76,10 @@ private:
     std::vector<uint64_t> _snapshots;  // sorted
     std::unordered_map<uint64_t, std::shared_ptr<SnapshotHolder>> _snapshotMap;
     boost::optional<uint64_t> _committedSnapshot;
+
+    // Snapshot to use for reads at a local stable timestamp.
+    mutable stdx::mutex _localSnapshotMutex;  // Guards _localSnapshot.
+    boost::optional<Timestamp> _localSnapshot;
 
     mutable stdx::mutex _mutex;  // Guards all members
 };

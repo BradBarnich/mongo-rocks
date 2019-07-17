@@ -435,11 +435,11 @@ namespace mongo {
         StandardBulkBuilder(RocksStandardIndex* index, OperationContext* opCtx) : _index(index),
                                                                                   _opCtx(opCtx) {}
 
-        Status addKey(const BSONObj& key, const RecordId& loc) {
+        StatusWith<SpecialFormatInserted> addKey(const BSONObj& key, const RecordId& loc) {
             return _index->insert(_opCtx, key, loc, true);
         }
 
-        void commit(bool mayInterrupt) {
+        SpecialFormatInserted commit(bool mayInterrupt) {
             WriteUnitOfWork uow(_opCtx);
             uow.commit();
         }
@@ -460,7 +460,7 @@ namespace mongo {
     class RocksIndexBase::UniqueBulkBuilder : public SortedDataBuilderInterface {
     public:
         UniqueBulkBuilder(std::string prefix, Ordering ordering,
-                          KeyString::Version keyStringVersion, std::string collectionNamespace,
+                          KeyString::Version keyStringVersion, NamespaceString collectionNamespace,
                           std::string indexName, OperationContext* opCtx,
                           bool dupsAllowed)
             : _prefix(std::move(prefix)),
@@ -472,7 +472,7 @@ namespace mongo {
               _dupsAllowed(dupsAllowed),
               _keyString(keyStringVersion) {}
 
-        Status addKey(const BSONObj& newKey, const RecordId& loc) {
+        StatusWith<SpecialFormatInserted> addKey(const BSONObj& newKey, const RecordId& loc) {
             Status s = checkKeySize(newKey);
             if (!s.isOK()) {
                 return s;
@@ -490,7 +490,7 @@ namespace mongo {
             else {
                 // Dup found!
                 if (!_dupsAllowed) {
-                    return Status(ErrorCodes::DuplicateKey, dupKeyError(newKey, _collectionNamespace, _indexName));
+                    return Status(ErrorCodes::DuplicateKey, dupKeyError(newKey, _collectionNamespace.toString(), _indexName));
                 }
 
                 // If we get here, we are in the weird mode where dups are allowed on a unique
@@ -505,7 +505,7 @@ namespace mongo {
             return Status::OK();
         }
 
-        void commit(bool mayInterrupt) {
+        SpecialFormatInserted commit(bool mayInterrupt) {
             WriteUnitOfWork uow(_opCtx);
             if (!_records.empty()) {
                 // This handles inserting the last unique key.
@@ -540,7 +540,7 @@ namespace mongo {
         std::string _prefix;
         Ordering _ordering;
         const KeyString::Version _keyStringVersion;
-        std::string _collectionNamespace;
+        NamespaceString _collectionNamespace;
         std::string _indexName;
         OperationContext* _opCtx;
         const bool _dupsAllowed;
@@ -636,14 +636,14 @@ namespace mongo {
 
     RocksUniqueIndex::RocksUniqueIndex(rocksdb::DB* db, std::string prefix, std::string ident,
                                        Ordering order, const BSONObj& config,
-                                       std::string collectionNamespace, std::string indexName,
+                                       NamespaceString collectionNamespace, std::string indexName,
                                        bool partial)
         : RocksIndexBase(db, prefix, ident, order, config),
           _collectionNamespace(std::move(collectionNamespace)),
           _indexName(std::move(indexName)),
           _partial(partial) {}
 
-    Status RocksUniqueIndex::insert(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
+    StatusWith<SpecialFormatInserted> RocksUniqueIndex::insert(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
                                     bool dupsAllowed) {
         Status s = checkKeySize(key);
         if (!s.isOK()) {
@@ -702,7 +702,7 @@ namespace mongo {
         }
 
         if (!dupsAllowed) {
-            return Status(ErrorCodes::DuplicateKey, dupKeyError(key, _collectionNamespace, _indexName));
+            return Status(ErrorCodes::DuplicateKey, dupKeyError(key, _collectionNamespace.toString(), _indexName));
         }
 
         if (!insertedLoc) {
@@ -854,7 +854,7 @@ namespace mongo {
             return Status::OK();
         }
 
-        return Status(ErrorCodes::DuplicateKey, dupKeyError(key, _collectionNamespace, _indexName));
+        return Status(ErrorCodes::DuplicateKey, dupKeyError(key, _collectionNamespace.toString(), _indexName));
     }
 
     SortedDataBuilderInterface* RocksUniqueIndex::getBulkBuilder(OperationContext* opCtx,
@@ -870,7 +870,7 @@ namespace mongo {
         : RocksIndexBase(db, prefix, ident, order, config),
           useSingleDelete(false) {}
 
-    Status RocksStandardIndex::insert(OperationContext* opCtx, const BSONObj& key,
+    StatusWith<SpecialFormatInserted> RocksStandardIndex::insert(OperationContext* opCtx, const BSONObj& key,
                                       const RecordId& loc, bool dupsAllowed) {
         invariant(dupsAllowed);
         Status s = checkKeySize(key);
