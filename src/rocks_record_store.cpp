@@ -498,7 +498,7 @@ namespace mongo {
                                                           const RecordId& justInserted) {
         // we do this is a sub transaction in case it aborts
         RocksRecoveryUnit* realRecoveryUnit =
-            checked_cast<RocksRecoveryUnit*>(opCtx->releaseRecoveryUnit());
+            checked_cast<RocksRecoveryUnit*>(opCtx->releaseRecoveryUnit().release());
         invariant(realRecoveryUnit);
         WriteUnitOfWork::RecoveryUnitState const realRUstate =
             opCtx->setRecoveryUnit(std::unique_ptr<RecoveryUnit>(realRecoveryUnit->newRocksRecoveryUnit()),
@@ -647,11 +647,25 @@ namespace mongo {
         return docsRemoved;
     }
 
+    Status RocksRecordStore::insertRecords(OperationContext* opCtx,
+                                 std::vector<Record>* records,
+                                 const std::vector<Timestamp>& timestamps) {
+        int index = 0;
+        for (auto& record : *records) {
+            StatusWith<RecordId> res =
+                insertRecord(opCtx, record.data.data(), record.data.size(), timestamps[index++]);
+            if (!res.isOK())
+                return res.getStatus();
+
+            record.id = res.getValue();
+        }
+        return Status::OK();
+    }
+
     StatusWith<RecordId> RocksRecordStore::insertRecord( OperationContext* opCtx,
                                                         const char* data,
                                                         int len,
-                                                        Timestamp timestamp,
-                                                        bool enforceQuota ) {
+                                                        Timestamp timestamp) {
 
         if ( _isCapped && len > _cappedMaxSize ) {
             return StatusWith<RecordId>( ErrorCodes::BadValue,
@@ -715,7 +729,7 @@ namespace mongo {
         invariant(pos == (buffer.get() + totalSize));
 
         for (size_t i = 0; i < nDocs; ++i) {
-            auto s = insertRecord(opCtx, records[i].data.data(), records[i].data.size(), Timestamp(), true);
+            auto s = insertRecord(opCtx, records[i].data.data(), records[i].data.size(), Timestamp());
             if (!s.isOK())
                 return s.getStatus();
             if (idsOut)

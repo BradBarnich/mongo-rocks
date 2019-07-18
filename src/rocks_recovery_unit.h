@@ -152,8 +152,6 @@ namespace mongo {
 
         static int getTotalLiveRecoveryUnits() { return _totalLiveRecoveryUnits.load(); }
 
-        void prepareForCreateSnapshot(OperationContext* opCtx);
-
         void setCommittedSnapshot(const rocksdb::Snapshot* committedSnapshot);
 
         rocksdb::DB* getDB() const { return _db; }

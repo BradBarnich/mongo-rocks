@@ -134,6 +134,7 @@ namespace mongo {
         virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key) {
             // dupKeyCheck shouldn't be called for non-unique indexes
             invariant(false);
+            return Status::OK();
         }
 
         virtual SortedDataBuilderInterface* getBulkBuilder(OperationContext* opCtx,

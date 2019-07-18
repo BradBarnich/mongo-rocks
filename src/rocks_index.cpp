@@ -442,6 +442,7 @@ namespace mongo {
         SpecialFormatInserted commit(bool mayInterrupt) {
             WriteUnitOfWork uow(_opCtx);
             uow.commit();
+            return SpecialFormatInserted::NoSpecialFormatInserted;
         }
 
     private:
@@ -512,6 +513,7 @@ namespace mongo {
                 doInsert();
             }
             uow.commit();
+            return SpecialFormatInserted::NoSpecialFormatInserted;
         }
 
     private:

@@ -344,6 +344,21 @@ namespace mongo {
         return std::move(recordStore);
     }
 
+    std::unique_ptr<RecordStore> RocksEngine::makeTemporaryRecordStore(OperationContext* opCtx,
+                                                                StringData ident) {
+
+        BSONObjBuilder configBuilder;
+        auto s = _createIdent(ident, &configBuilder);
+        auto config = _getIdentConfig(ident);
+        std::string prefix = _extractPrefix(config);
+
+        return stdx::make_unique<RocksRecordStore>("", 
+            ident, _db.get(), _counterManager.get(),
+            _durabilityManager.get(), _compactionScheduler.get(),
+            prefix);
+
+    }
+
     Status RocksEngine::createSortedDataInterface(OperationContext* opCtx,
                                      const CollectionOptions& collOptions,
                                      StringData ident,

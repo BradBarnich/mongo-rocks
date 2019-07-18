@@ -86,7 +86,7 @@ namespace mongo {
                                          const CollectionOptions& options) override;
 
         virtual std::unique_ptr<RecordStore> makeTemporaryRecordStore(OperationContext* opCtx,
-                                                                  StringData ident) = 0;
+                                                                  StringData ident) override;
 
         virtual std::unique_ptr<RecordStore> getRecordStore(OperationContext* opCtx, StringData ns,
                                             StringData ident,
@@ -150,20 +150,17 @@ namespace mongo {
 
         virtual void setJournalListener(JournalListener* jl);
 
-         /**
-         * See `StorageEngine::getAllCommittedTimestamp`
-         */
-        virtual Timestamp getAllCommittedTimestamp() const = 0;
+        virtual Timestamp getAllCommittedTimestamp() const override {
+            MONGO_UNREACHABLE;
+        }
 
-        /**
-         * See `StorageEngine::getOldestOpenReadTimestamp`
-         */
-        virtual Timestamp getOldestOpenReadTimestamp() const = 0;
+        virtual Timestamp getOldestOpenReadTimestamp() const override {
+            return Timestamp();
+        }
 
-        /**
-         * See `StorageEngine::getOplogNeededForCrashRecovery`
-         */
-        virtual boost::optional<Timestamp> getOplogNeededForCrashRecovery() const = 0;
+        boost::optional<Timestamp> getOplogNeededForCrashRecovery() const final {
+            return boost::none;
+        }
 
         // rocks specific api
 

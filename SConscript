@@ -9,6 +9,10 @@ env.Library(
         ],
     )
 
+baselibs = ["rocksdb","zstd","lz4"];
+if env.TargetOSIs('windows'):
+    baselibs.extend(["Shlwapi","Rpcrt4"])
+
 env.Library(
     target= 'storage_rocks_base',
     source= [
@@ -39,12 +43,9 @@ env.Library(
         '$BUILD_DIR/mongo/util/concurrency/ticketholder',
         '$BUILD_DIR/mongo/util/processinfo',
         '$BUILD_DIR/third_party/shim_snappy',
-        '$BUILD_DIR/third_party/shim_lz4',
         'storage_rocks_global_options',
         ],
-    SYSLIBDEPS=["rocksdb",
-                "z",
-                "bz2"] #z and bz2 are dependencies for rocks
+    SYSLIBDEPS=baselibs
     )
 
 env.Library(
@@ -59,7 +60,7 @@ env.Library(
         ],
     LIBDEPS= [
         'storage_rocks_base',
-        '$BUILD_DIR/mongo/db/storage/kv/kv_engine'
+        '$BUILD_DIR/mongo/db/storage/kv/kv_prefix'
         ],
     LIBDEPS_DEPENDENTS=['$BUILD_DIR/mongo/db/serveronly']
     )

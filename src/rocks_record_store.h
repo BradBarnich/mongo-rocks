@@ -138,11 +138,14 @@ namespace mongo {
 
         virtual void deleteRecord( OperationContext* opCtx, const RecordId& dl );
 
+        virtual Status insertRecords(OperationContext* opCtx,
+                                 std::vector<Record>* inOutRecords,
+                                 const std::vector<Timestamp>& timestamps);
+
         virtual StatusWith<RecordId> insertRecord( OperationContext* opCtx,
                                                   const char* data,
                                                   int len,
-                                                  Timestamp timestamp,
-                                                  bool enforceQuota );
+                                                  Timestamp timestamp );
 
         virtual Status insertRecordsWithDocWriter(OperationContext* opCtx,
                                                   const DocWriter* const* docs,

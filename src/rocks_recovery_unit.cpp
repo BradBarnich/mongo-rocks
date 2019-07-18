@@ -248,7 +248,7 @@ namespace mongo {
         try {
             for (Changes::const_iterator it = _changes.begin(), end = _changes.end(); it != end;
                     ++it) {
-                (*it)->commit();
+                (*it)->commit(boost::none);
             }
             _changes.clear();
         }
@@ -319,16 +319,6 @@ namespace mongo {
         _snapshotHolder.reset();
 
         _mySnapshotId = nextSnapshotId.fetchAndAdd(1);
-    }
-
-    void RocksRecoveryUnit::prepareForCreateSnapshot(OperationContext* opCtx) {
-        invariant(!_readFromMajorityCommittedSnapshot);
-        _areWriteUnitOfWorksBanned = true;
-        if (_preparedSnapshot) {
-            // release old one, in case somebody calls prepareForCreateSnapshot twice in a row
-            _db->ReleaseSnapshot(_preparedSnapshot);
-        }
-        _preparedSnapshot = _db->GetSnapshot();
     }
 
     void RocksRecoveryUnit::_commit() {
