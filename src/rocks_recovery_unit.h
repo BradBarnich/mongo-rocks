@@ -97,8 +97,6 @@ namespace mongo {
 
         boost::optional<Timestamp> getPointInTimeReadTimestamp() const;
 
-        virtual void* writingPtr(void* data, size_t len) { invariant(!"don't call writingPtr"); }
-
         virtual void registerChange(Change* change);
 
         virtual void setOrderedCommit(bool orderedCommit) override {};

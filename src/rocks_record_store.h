@@ -170,9 +170,8 @@ namespace mongo {
 
         virtual Status compact( OperationContext* opCtx );
 
-        virtual Status validate( OperationContext* opCtx,
+        virtual void validate( OperationContext* opCtx,
                                  ValidateCmdLevel level,
-                                 ValidateAdaptor* adaptor,
                                  ValidateResults* results, BSONObjBuilder* output );
 
         virtual void appendCustomStats( OperationContext* opCtx,

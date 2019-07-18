@@ -805,48 +805,10 @@ namespace mongo {
         return rocksToMongoStatus(_db->CompactRange(options, &beginRange, &endRange));
     }
 
-    Status RocksRecordStore::validate( OperationContext* opCtx,
+    void RocksRecordStore::validate( OperationContext* opCtx,
                                        ValidateCmdLevel level,
-                                       ValidateAdaptor* adaptor,
                                        ValidateResults* results,
                                        BSONObjBuilder* output ) {
-        long long nrecords = 0;
-        long long dataSizeTotal = 0;
-        long long nInvalid = 0;
-
-        auto cursor = getCursor(opCtx, true);
-        results->valid = true;
-        const int interruptInterval = 4096;
-        while (auto record = cursor->next()) {
-            if (!(nrecords % interruptInterval))
-                opCtx->checkForInterrupt();
-            ++nrecords;
-            size_t dataSize;
-            Status status = adaptor->validate(record->id, record->data, &dataSize);
-            if (!status.isOK()) {
-                if (results->valid) {
-                    // Do this only once.
-                    results->errors.push_back("detected one or more invalid documents (see logs)");
-                }
-                nInvalid++;
-                results->valid = false;
-                log() << "document at location: " << record->id << " is corrupted";
-            }
-            dataSizeTotal += static_cast<long long>(dataSize);
-        }
-
-        if (results->valid) {
-            long long storedNumRecords = numRecords(opCtx);
-            long long storedDataSize = dataSize(opCtx);
-
-            if (nrecords != storedNumRecords || dataSizeTotal != storedDataSize) {
-                updateStatsAfterRepair(opCtx, nrecords, dataSizeTotal);
-            }
-        }
-        output->append("nInvalidDocuments", nInvalid);
-        output->appendNumber("nrecords", nrecords);
-
-        return Status::OK();
     }
 
     void RocksRecordStore::appendCustomStats( OperationContext* opCtx,

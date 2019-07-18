@@ -85,6 +85,9 @@ namespace mongo {
                                          StringData ident,
                                          const CollectionOptions& options) override;
 
+        virtual std::unique_ptr<RecordStore> makeTemporaryRecordStore(OperationContext* opCtx,
+                                                                  StringData ident) = 0;
+
         virtual std::unique_ptr<RecordStore> getRecordStore(OperationContext* opCtx, StringData ns,
                                             StringData ident,
                                             const CollectionOptions& options) override;
@@ -146,6 +149,21 @@ namespace mongo {
         static bool initRsOplogBackgroundThread(StringData ns);
 
         virtual void setJournalListener(JournalListener* jl);
+
+         /**
+         * See `StorageEngine::getAllCommittedTimestamp`
+         */
+        virtual Timestamp getAllCommittedTimestamp() const = 0;
+
+        /**
+         * See `StorageEngine::getOldestOpenReadTimestamp`
+         */
+        virtual Timestamp getOldestOpenReadTimestamp() const = 0;
+
+        /**
+         * See `StorageEngine::getOplogNeededForCrashRecovery`
+         */
+        virtual boost::optional<Timestamp> getOplogNeededForCrashRecovery() const = 0;
 
         // rocks specific api
 
