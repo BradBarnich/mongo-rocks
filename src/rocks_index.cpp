@@ -80,16 +80,6 @@ namespace mongo {
             return b.obj();
         }
 
-        string dupKeyError(const BSONObj& key, const std::string& collectionNamespace,
-                           const std::string& indexName) {
-            stringstream ss;
-            ss << "E11000 duplicate key error";
-            ss << " collection: " << collectionNamespace;
-            ss << " index: " << indexName;
-            ss << " dup key: " << key.toString();
-            return ss.str();
-        }
-
         const int kTempKeyMaxSize = 1024;  // Do the same as the heap implementation
 
         Status checkKeySize(const BSONObj& key) {
@@ -463,7 +453,7 @@ namespace mongo {
         UniqueBulkBuilder(std::string prefix, Ordering ordering,
                           KeyString::Version keyStringVersion, NamespaceString collectionNamespace,
                           std::string indexName, OperationContext* opCtx,
-                          bool dupsAllowed)
+                          bool dupsAllowed, const BSONObj& keyPattern)
             : _prefix(std::move(prefix)),
               _ordering(ordering),
               _keyStringVersion(keyStringVersion),
@@ -471,7 +461,8 @@ namespace mongo {
               _indexName(std::move(indexName)),
               _opCtx(opCtx),
               _dupsAllowed(dupsAllowed),
-              _keyString(keyStringVersion) {}
+              _keyString(keyStringVersion),
+              _keyPattern(keyPattern) {}
 
         StatusWith<SpecialFormatInserted> addKey(const BSONObj& newKey, const RecordId& loc) {
             Status s = checkKeySize(newKey);
@@ -492,7 +483,6 @@ namespace mongo {
                 // Dup found!
                 if (!_dupsAllowed) {
                     return buildDupKeyErrorStatus(newKey, _collectionNamespace, _indexName, _keyPattern);
-                    return Status(ErrorCodes::DuplicateKey, dupKeyError(newKey, _collectionNamespace.toString(), _indexName));
                 }
 
                 // If we get here, we are in the weird mode where dups are allowed on a unique
@@ -549,17 +539,19 @@ namespace mongo {
         const bool _dupsAllowed;
         BSONObj _key;
         KeyString _keyString;
+        const BSONObj& _keyPattern;
         std::vector<std::pair<RecordId, KeyString::TypeBits>> _records;
     };
 
     /// RocksIndexBase
 
     RocksIndexBase::RocksIndexBase(rocksdb::DB* db, std::string prefix, std::string ident,
-                                   Ordering order, const BSONObj& config)
+                                   const IndexDescriptor* desc, const BSONObj& config)
         : _db(db),
           _prefix(prefix),
           _ident(std::move(ident)),
-          _order(order)
+          _keyPattern(desc->keyPattern()),
+          _order(Ordering::make(_keyPattern))
     {
         uint64_t storageSize;
         std::string nextPrefix = rocksGetNextPrefix(_prefix);
@@ -637,14 +629,13 @@ namespace mongo {
 
     /// RocksUniqueIndex
 
-    RocksUniqueIndex::RocksUniqueIndex(rocksdb::DB* db, std::string prefix, std::string ident,
-                                       Ordering order, const BSONObj& config,
-                                       NamespaceString collectionNamespace, std::string indexName,
-                                       bool partial)
-        : RocksIndexBase(db, prefix, ident, order, config),
-          _collectionNamespace(std::move(collectionNamespace)),
-          _indexName(std::move(indexName)),
-          _partial(partial) {}
+    RocksUniqueIndex::RocksUniqueIndex(rocksdb::DB* db, 
+                                       std::string prefix, std::string ident,
+                                       const IndexDescriptor* desc, const BSONObj& config)
+        : RocksIndexBase(db, prefix, ident, desc, config),
+          _collectionNamespace(desc->parentNS()),
+          _indexName(desc->indexName()),
+          _partial(desc->isPartial()) {}
 
     StatusWith<SpecialFormatInserted> RocksUniqueIndex::insert(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
                                     bool dupsAllowed) {
@@ -705,7 +696,7 @@ namespace mongo {
         }
 
         if (!dupsAllowed) {
-            return Status(ErrorCodes::DuplicateKey, dupKeyError(key, _collectionNamespace.toString(), _indexName));
+            return buildDupKeyErrorStatus(key, _collectionNamespace, _indexName, _keyPattern);
         }
 
         if (!insertedLoc) {
@@ -857,20 +848,20 @@ namespace mongo {
             return Status::OK();
         }
 
-        return Status(ErrorCodes::DuplicateKey, dupKeyError(key, _collectionNamespace.toString(), _indexName));
+        return buildDupKeyErrorStatus(key, _collectionNamespace, _indexName, _keyPattern);
     }
 
     SortedDataBuilderInterface* RocksUniqueIndex::getBulkBuilder(OperationContext* opCtx,
                                                                  bool dupsAllowed) {
         return new RocksIndexBase::UniqueBulkBuilder(_prefix, _order, _keyStringVersion,
                                                      _collectionNamespace, _indexName, opCtx,
-                                                     dupsAllowed);
+                                                     dupsAllowed, _keyPattern);
     }
 
     /// RocksStandardIndex
     RocksStandardIndex::RocksStandardIndex(rocksdb::DB* db, std::string prefix, std::string ident,
-                                           Ordering order, const BSONObj& config)
-        : RocksIndexBase(db, prefix, ident, order, config),
+                                           const IndexDescriptor* desc, const BSONObj& config)
+        : RocksIndexBase(db, prefix, ident, desc, config),
           useSingleDelete(false) {}
 
     StatusWith<SpecialFormatInserted> RocksStandardIndex::insert(OperationContext* opCtx, const BSONObj& key,

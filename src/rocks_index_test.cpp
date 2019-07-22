@@ -37,6 +37,7 @@
 #include <rocksdb/slice.h>
 
 #include "mongo/base/init.h"
+#include "mongo/db/catalog/collection_mock.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/db/storage/sorted_data_interface_test_harness.h"
 #include "mongo/stdx/memory.h"
@@ -68,15 +69,35 @@ namespace {
             _durabilityManager.reset(new RocksDurabilityManager(_db.get(), true));
         }
 
-        std::unique_ptr<SortedDataInterface> newSortedDataInterface(bool unique) {
+        std::unique_ptr<SortedDataInterface> newSortedDataInterface(bool unique, bool partial) {
             BSONObjBuilder configBuilder;
             RocksIndexBase::generateConfig(&configBuilder, 3, IndexDescriptor::IndexVersion::kV2);
+
+            auto collection = std::make_unique<CollectionMock>(NamespaceString(_testNamespace));
+
+            BSONObj spec = BSON("key" << BSON("a" << 1) << "name"
+                                  << "testIndex"
+                                  << "v"
+                                  << static_cast<int>(IndexDescriptor::kLatestIndexVersion)
+                                  << "ns"
+                                  << _testNamespace
+                                  << "unique"
+                                  << unique);
+
+            if (partial) {
+                auto partialBSON =
+                    BSON(IndexDescriptor::kPartialFilterExprFieldName.toString() << BSON(""
+                                                                                     << ""));
+                spec = spec.addField(partialBSON.firstElement());
+            }
+
+            IndexDescriptor desc(collection.get(), "", spec);
+
             if (unique) {
-                return stdx::make_unique<RocksUniqueIndex>(_db.get(), "prefix", "ident", _order,
-                                                           configBuilder.obj(), "test.rocks",
-                                                           "testIndex");
+                return stdx::make_unique<RocksUniqueIndex>(_db.get(), "prefix", "ident", &desc,
+                                                           configBuilder.obj());
             } else {
-                return stdx::make_unique<RocksStandardIndex>(_db.get(), "prefix", "ident", _order,
+                return stdx::make_unique<RocksStandardIndex>(_db.get(), "prefix", "ident", &desc,
                                                              configBuilder.obj());
             }
         }
@@ -111,7 +132,7 @@ namespace {
         auto harnessHelper = stdx::make_unique<RocksIndexHarness>();
 
         const std::unique_ptr<SortedDataInterface>
-        sorted(harnessHelper->newSortedDataInterface(true));
+        sorted(harnessHelper->newSortedDataInterface(true, false));
 
         {
             const ServiceContext::UniqueOperationContext opCtx(
@@ -178,7 +199,7 @@ namespace {
         std::unique_ptr<SortedDataInterfaceHarnessHelper> harnessHelper =
             stdx::make_unique<RocksIndexHarness>();
         auto opCtx = harnessHelper->newOperationContext();
-        auto sorted = harnessHelper->newSortedDataInterface(unique,
+        auto sorted = harnessHelper->newSortedDataInterface(unique, false,
                 {{key1, loc1}, {key2, loc1}, {key3, loc1}});
         auto cursor = sorted->newCursor(opCtx.get(), forward);
         ASSERT_EQ(cursor->seekExact(key2), IndexKeyEntry(key2, loc1));

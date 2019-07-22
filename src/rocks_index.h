@@ -52,7 +52,7 @@ namespace mongo {
         RocksIndexBase& operator=(const RocksIndexBase&) = delete;
 
     public:
-        RocksIndexBase(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order,
+        RocksIndexBase(rocksdb::DB* db, std::string prefix, std::string ident, const IndexDescriptor* desc,
                        const BSONObj& config);
 
         virtual SortedDataBuilderInterface* getBulkBuilder(OperationContext* opCtx,
@@ -84,6 +84,7 @@ namespace mongo {
         // Each key in the index is prefixed with _prefix
         std::string _prefix;
         std::string _ident;
+        const BSONObj _keyPattern;
 
         // very approximate index storage size
         std::atomic<long long> _indexStorageSize;
@@ -99,9 +100,8 @@ namespace mongo {
 
     class RocksUniqueIndex : public RocksIndexBase {
     public:
-        RocksUniqueIndex(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order,
-                         const BSONObj& config, NamespaceString collectionNamespace,
-                         std::string indexName, bool partial = false);
+        RocksUniqueIndex(rocksdb::DB* db, std::string prefix, std::string ident,
+                         const IndexDescriptor* desc, const BSONObj& config);
 
         virtual StatusWith<SpecialFormatInserted> insert(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
                               bool dupsAllowed);
@@ -122,8 +122,8 @@ namespace mongo {
 
     class RocksStandardIndex : public RocksIndexBase {
     public:
-        RocksStandardIndex(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order,
-                           const BSONObj& config);
+        RocksStandardIndex(rocksdb::DB* db, std::string prefix, std::string ident,
+                           const IndexDescriptor* desc, const BSONObj& config);
 
         virtual StatusWith<SpecialFormatInserted> insert(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
                               bool dupsAllowed);

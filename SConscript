@@ -9,7 +9,7 @@ env.Library(
         ],
     )
 
-baselibs = ["rocksdb","zstd","lz4"];
+baselibs = ["rocksdb","zstd","lz4","zlib"];
 if env.TargetOSIs('windows'):
     baselibs.extend(["Shlwapi","Rpcrt4"])
 
