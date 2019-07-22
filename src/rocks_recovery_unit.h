@@ -95,7 +95,7 @@ namespace mongo {
 
         Status obtainMajorityCommittedSnapshot() override;
 
-        boost::optional<Timestamp> getPointInTimeReadTimestamp() const;
+        boost::optional<Timestamp> getPointInTimeReadTimestamp() override;
 
         virtual void registerChange(Change* change);
 

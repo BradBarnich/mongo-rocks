@@ -491,6 +491,7 @@ namespace mongo {
             else {
                 // Dup found!
                 if (!_dupsAllowed) {
+                    return buildDupKeyErrorStatus(newKey, _collectionNamespace, _indexName, _keyPattern);
                     return Status(ErrorCodes::DuplicateKey, dupKeyError(newKey, _collectionNamespace.toString(), _indexName));
                 }
 

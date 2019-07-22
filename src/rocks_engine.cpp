@@ -352,7 +352,7 @@ namespace mongo {
         auto config = _getIdentConfig(ident);
         std::string prefix = _extractPrefix(config);
 
-        return stdx::make_unique<RocksRecordStore>("", 
+        return stdx::make_unique<RocksRecordStore>("",
             ident, _db.get(), _counterManager.get(),
             _durabilityManager.get(), _compactionScheduler.get(),
             prefix);
@@ -380,7 +380,7 @@ namespace mongo {
         if (desc->unique()) {
             index = new RocksUniqueIndex(_db.get(), prefix, ident.toString(),
                                          Ordering::make(desc->keyPattern()), std::move(config),
-                                         desc->parentNS(), desc->indexName(), desc->isPartial());
+                                         desc->parentNS(), desc->indexName(), desc->isPartial(), desc->keyPattern());
         } else {
             auto si = new RocksStandardIndex(_db.get(), prefix, ident.toString(),
                                              Ordering::make(desc->keyPattern()), std::move(config));

@@ -292,7 +292,7 @@ namespace mongo {
         return Status::OK();
     }
 
-    boost::optional<Timestamp> RocksRecoveryUnit::getPointInTimeReadTimestamp() const {
+    boost::optional<Timestamp> RocksRecoveryUnit::getPointInTimeReadTimestamp() {
         if (!_readFromMajorityCommittedSnapshot)
             return {};
         return Timestamp(_snapshotManager->getCommittedSnapshot().get()->name);
