@@ -151,7 +151,7 @@ namespace mongo {
         virtual void setJournalListener(JournalListener* jl);
 
         virtual Timestamp getAllCommittedTimestamp() const override {
-            MONGO_UNREACHABLE;
+            return Timestamp();
         }
 
         virtual Timestamp getOldestOpenReadTimestamp() const override {

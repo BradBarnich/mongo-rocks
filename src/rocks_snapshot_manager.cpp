@@ -44,6 +44,8 @@ namespace mongo {
 
         uint64_t nameU64 = ts.asULL();
         invariant(!_committedSnapshot || *_committedSnapshot <= nameU64);
+        _snapshotMap[nameU64] = std::make_shared<SnapshotHolder>(opCtx, nameU64);
+        _snapshots.push_back(nameU64);
         _committedSnapshot = nameU64;
     }
 
@@ -51,8 +53,12 @@ namespace mongo {
     stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
     if (timestamp.isNull())
         _localSnapshot = boost::none;
-    else
+    else {
+        uint64_t nameU64 = timestamp.asULL();
+         _snapshotMap[nameU64] = std::make_shared<SnapshotHolder>(opCtx, nameU64);
+        _snapshots.push_back(nameU64);
         _localSnapshot = timestamp;
+    }
 }
 
     boost::optional<Timestamp> RocksSnapshotManager::getLocalSnapshot() {

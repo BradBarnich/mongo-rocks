@@ -46,6 +46,7 @@
 #include "mongo/bson/bsonobjbuilder.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/db/storage/index_entry_comparison.h"
+#include "mongo/db/storage/sorted_data_interface.h"
 #include "mongo/stdx/memory.h"
 #include "mongo/util/log.h"
 #include "mongo/util/str.h"
@@ -667,7 +668,7 @@ namespace mongo {
             }
             rocksdb::Slice valueSlice(value.getBuffer(), value.getSize());
             ru->writeBatch()->Put(prefixedKey, valueSlice);
-            return Status::OK();
+            return StatusWith<SpecialFormatInserted>(SpecialFormatInserted::NoSpecialFormatInserted);
         }
 
         // we are in a weird state where there might be multiple values for a key
@@ -681,7 +682,7 @@ namespace mongo {
         while (br.remaining()) {
             RecordId locInIndex = KeyString::decodeRecordId(&br);
             if (loc == locInIndex) {
-                return Status::OK();  // already in index
+                return StatusWith<SpecialFormatInserted>(SpecialFormatInserted::NoSpecialFormatInserted);  // already in index
             }
 
             if (!insertedLoc && loc < locInIndex) {
@@ -707,7 +708,7 @@ namespace mongo {
 
         rocksdb::Slice valueVectorSlice(valueVector.getBuffer(), valueVector.getSize());
         ru->writeBatch()->Put(prefixedKey, valueVectorSlice);
-        return Status::OK();
+        return StatusWith<SpecialFormatInserted>(SpecialFormatInserted::NoSpecialFormatInserted);
     }
 
     void RocksUniqueIndex::unindex(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
@@ -891,7 +892,7 @@ namespace mongo {
 
         ru->writeBatch()->Put(prefixedKey, value);
 
-        return Status::OK();
+        return StatusWith<SpecialFormatInserted>(SpecialFormatInserted::NoSpecialFormatInserted);
     }
 
     void RocksStandardIndex::unindex(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
