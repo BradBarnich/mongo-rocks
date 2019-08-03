@@ -221,7 +221,7 @@ namespace mongo {
           _durabilityManager(durabilityManager),
           _durable(durable),
           _transaction(transactionEngine),
-          _writeBatch(rocksdb::BytewiseComparator(), 0, true, 0, sizeof(u_int64_t) ),
+          _writeBatch(rocksdb::BytewiseComparator(), 0, true, 0, sizeof(uint64_t) ),
           _snapshot(nullptr),
           _preparedSnapshot(nullptr),
           _mySnapshotId(nextSnapshotId.fetchAndAdd(1)) {
