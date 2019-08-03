@@ -221,7 +221,7 @@ namespace mongo {
           _durabilityManager(durabilityManager),
           _durable(durable),
           _transaction(transactionEngine),
-          _writeBatch(rocksdb::BytewiseComparator(), 0, true),
+          _writeBatch(rocksdb::BytewiseComparator(), 0, true, 0, sizeof(u_int64_t) ),
           _snapshot(nullptr),
           _preparedSnapshot(nullptr),
           _mySnapshotId(nextSnapshotId.fetchAndAdd(1)) {
@@ -295,7 +295,7 @@ namespace mongo {
     boost::optional<Timestamp> RocksRecoveryUnit::getPointInTimeReadTimestamp() {
         if (!_readFromMajorityCommittedSnapshot)
             return {};
-        return Timestamp(_snapshotManager->getCommittedSnapshot().get()->name);
+        return Timestamp(*_snapshotManager->getCommittedSnapshot());
     }
 
     SnapshotId RocksRecoveryUnit::getSnapshotId() const { return SnapshotId(_mySnapshotId); }
@@ -379,12 +379,12 @@ namespace mongo {
             _timer.reset(new Timer());
         }
 
-        if (_readFromMajorityCommittedSnapshot) {
-            if (_snapshotHolder.get() == nullptr) {
-                _snapshotHolder = _snapshotManager->getCommittedSnapshot();
-            }
-            return _snapshotHolder->snapshot;
-        }
+        // if (_readFromMajorityCommittedSnapshot) {
+        //     if (_snapshotHolder.get() == nullptr) {
+        //         _snapshotHolder = _snapshotManager->getCommittedSnapshot();
+        //     }
+        //     return _snapshotHolder->snapshot;
+        // }
         if (!_snapshot) {
             // RecoveryUnit might be used for writing, so we need to call recordSnapshotId().
             // Order of operations here is important. It needs to be synchronized with
@@ -410,6 +410,19 @@ namespace mongo {
         }
         rocksdb::ReadOptions options;
         options.snapshot = snapshot();
+        rocksdb::Slice readTs;
+        uint64_t maxTs = ULLONG_MAX;
+        if (_readFromMajorityCommittedSnapshot) {
+            readTs = rocksdb::Slice(reinterpret_cast<const char*>(*_snapshotManager->getCommittedSnapshot()),sizeof(uint64_t));
+            options.timestamp = &readTs;
+        } else {
+            readTs = rocksdb::Slice(reinterpret_cast<const char*>(&maxTs),sizeof(uint64_t));
+            options.timestamp = &readTs;
+        //     if (_snapshotHolder.get() == nullptr) {
+        //         _snapshotHolder = _snapshotManager->getCommittedSnapshot();
+        //     }
+        //     return _snapshotHolder->snapshot;
+        }
         return _db->Get(options, key, value);
     }
 

@@ -40,52 +40,51 @@
 
 namespace mongo {
     void RocksSnapshotManager::setCommittedSnapshot(const Timestamp& ts) {
-        stdx::lock_guard<stdx::mutex> lock(_mutex);
+        stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
 
         uint64_t nameU64 = ts.asULL();
         invariant(!_committedSnapshot || *_committedSnapshot <= nameU64);
-        _snapshotMap[nameU64] = std::make_shared<SnapshotHolder>(opCtx, nameU64);
-        _snapshots.push_back(nameU64);
         _committedSnapshot = nameU64;
     }
 
     void RocksSnapshotManager::setLocalSnapshot(const Timestamp& timestamp) {
-    stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
-    if (timestamp.isNull())
-        _localSnapshot = boost::none;
-    else {
-        uint64_t nameU64 = timestamp.asULL();
-         _snapshotMap[nameU64] = std::make_shared<SnapshotHolder>(opCtx, nameU64);
-        _snapshots.push_back(nameU64);
-        _localSnapshot = timestamp;
+        stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
+        if (timestamp.isNull())
+            _localSnapshot = boost::none;
+        else {
+            uint64_t nameU64 = timestamp.asULL();
+            _localSnapshot = nameU64;
+        }
     }
-}
 
-    boost::optional<Timestamp> RocksSnapshotManager::getLocalSnapshot() {
+    boost::optional<uint64_t> RocksSnapshotManager::getLocalSnapshot() const {
         stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
         return _localSnapshot;
     }
 
     void RocksSnapshotManager::dropAllSnapshots() {
-        stdx::lock_guard<stdx::mutex> lock(_mutex);
-        _committedSnapshot = boost::none;
-        _snapshotMap.clear();
-        _snapshots.clear();
+        {
+            stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
+            _committedSnapshot = boost::none;
+        }
+        {
+            stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
+            _localSnapshot = boost::none;
+        }
     }
 
     bool RocksSnapshotManager::haveCommittedSnapshot() const {
-        stdx::lock_guard<stdx::mutex> lock(_mutex);
+        stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
         return bool(_committedSnapshot);
     }
 
-    std::shared_ptr<RocksSnapshotManager::SnapshotHolder>
-    RocksSnapshotManager::getCommittedSnapshot() const {
-        stdx::lock_guard<stdx::mutex> lock(_mutex);
+    boost::optional<uint64_t> RocksSnapshotManager::getCommittedSnapshot() const {
+        stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
 
         uassert(ErrorCodes::ReadConcernMajorityNotAvailableYet,
                 "Committed view disappeared while running operation", _committedSnapshot);
 
-        return _snapshotMap.at(*_committedSnapshot);
+        return _committedSnapshot;
     }
 
     RocksSnapshotManager::SnapshotHolder::SnapshotHolder(OperationContext* opCtx, uint64_t name_) {
