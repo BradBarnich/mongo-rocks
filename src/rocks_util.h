@@ -31,6 +31,7 @@
 #include <string>
 #include <rocksdb/status.h>
 
+#include "mongo/platform/endian.h"
 #include "mongo/util/assert_util.h"
 
 namespace mongo {
@@ -49,6 +50,7 @@ namespace mongo {
     }
 
     std::string encodePrefix(uint32_t prefix);
+    std::string encodeTimestamp(uint64_t prefix);
     bool extractPrefix(const rocksdb::Slice& slice, uint32_t* prefix);
     int get_internal_delete_skipped_count();
 
@@ -62,6 +64,20 @@ namespace mongo {
             return Status::OK();
         }
         return rocksToMongoStatus_slow(status, prefix);
+    }
+
+    inline rocksdb::Slice StripTimestampFromUserKey(const rocksdb::Slice& user_key) {
+	    assert(user_key.size() >= sizeof(uint64_t));
+	    return rocksdb::Slice(user_key.data(), user_key.size() - sizeof(uint64_t));
+	}
+
+    inline bool GetFixed64(rocksdb::Slice* input, uint64_t* value) {
+        if (input->size() < sizeof(uint64_t)) {
+            return false;
+        }
+        *value = endian::bigToNative(*reinterpret_cast<const uint64_t*>(input->data()));
+        input->remove_prefix(sizeof(uint64_t));
+        return true;
     }
 
 #define invariantRocksOK(expression) do { \

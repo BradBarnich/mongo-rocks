@@ -243,7 +243,9 @@ namespace mongo {
             // Seeks to query. Returns true on exact match.
             bool seekCursor(const KeyString& query) {
                 auto * iter = iterator();
-                const rocksdb::Slice keySlice(query.getBuffer(), query.getSize());
+                auto keyString = std::string(query.getBuffer(), query.getSize());
+                keyString.append(sizeof(uint64_t), '\0');
+                const rocksdb::Slice keySlice(keyString);
                 iter->Seek(keySlice);
                 if (!_updateOnIteratorValidity()) {
                     if (!_forward) {

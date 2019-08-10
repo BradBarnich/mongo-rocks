@@ -229,6 +229,7 @@ namespace mongo {
         std::unique_ptr<RocksCompactionScheduler> _compactionScheduler;
 
         static const std::string kMetadataPrefix;
+        static const std::string kMetadataPrefixWithTimestamp;
 
         std::unique_ptr<RocksDurabilityManager> _durabilityManager;
         class RocksJournalFlusher;

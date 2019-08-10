@@ -45,6 +45,11 @@ namespace mongo {
         return std::string(reinterpret_cast<const char*>(&bigEndianPrefix), sizeof(uint32_t));
     }
 
+    std::string encodeTimestamp(uint64_t prefix) {
+        uint64_t bigEndianPrefix = endian::nativeToBig(prefix);
+        return std::string(reinterpret_cast<const char*>(&bigEndianPrefix), sizeof(uint64_t));
+    }
+
     // we encode prefixes in big endian because we want to quickly jump to the max prefix
     // (iter->SeekToLast())
     bool extractPrefix(const rocksdb::Slice& slice, uint32_t* prefix) {

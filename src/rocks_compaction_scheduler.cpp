@@ -246,8 +246,12 @@ namespace mongo {
     }
 
     void CompactionBackgroundJob::compact(const CompactOp& op) {
-        rocksdb::Slice start_slice(op._start_str);
-        rocksdb::Slice end_slice(op._end_str);
+        auto start_string = std::string(op._start_str);
+        start_string.append(sizeof(uint64_t), '\0');
+        auto end_string = std::string(op._end_str);
+        end_string.append(sizeof(uint64_t), '\0');
+        rocksdb::Slice start_slice(start_string);
+        rocksdb::Slice end_slice(end_string);
 
         rocksdb::Slice* start = !op._start_str.empty() ? &start_slice : nullptr;
         rocksdb::Slice* end = !op._end_str.empty() ? &end_slice : nullptr;

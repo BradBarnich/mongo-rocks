@@ -49,6 +49,7 @@
 #include "rocks_counter_manager.h"
 #include "rocks_snapshot_manager.h"
 #include "rocks_durability_manager.h"
+#include "rocks_util.h"
 
 namespace rocksdb {
     class DB;
@@ -61,7 +62,70 @@ namespace rocksdb {
 }
 
 namespace mongo {
+    class TimestampComparatorImpl : public rocksdb::Comparator {
+	   private:
+	    const Comparator* cmp_without_ts_;
+	
+	   public:
+	    explicit TimestampComparatorImpl()
+	        : Comparator(sizeof(uint64_t)), cmp_without_ts_(nullptr) {
+	      cmp_without_ts_ = rocksdb::BytewiseComparator();
+	    }
+	
+	    const char* Name() const override { return "TimestampComparator"; }
+	
+	    void FindShortSuccessor(std::string*) const override {
+        MONGO_UNREACHABLE
+      }
+	
+	    void FindShortestSeparator(std::string*, const rocksdb::Slice&) const override {
+        MONGO_UNREACHABLE
+      }
+	
+	    int Compare(const rocksdb::Slice& a, const rocksdb::Slice& b) const override {
+	      int r = CompareWithoutTimestamp(a, b);
+	      if (r != 0 || 0 == timestamp_size()) {
+	        return r;
+	      }
+	      return CompareTimestamp(
+	          rocksdb::Slice(a.data() + a.size() - timestamp_size(), timestamp_size()),
+	          rocksdb::Slice(b.data() + b.size() - timestamp_size(), timestamp_size()));
+	    }
+	
+	    int CompareWithoutTimestamp(const rocksdb::Slice& a, const rocksdb::Slice& b) const override {
+        assert(a.size() >= timestamp_size());
+	      assert(b.size() >= timestamp_size());
+	      rocksdb::Slice k1 = StripTimestampFromUserKey(a);
+	      rocksdb::Slice k2 = StripTimestampFromUserKey(b);
 
+        return cmp_without_ts_->Compare(k1, k2);
+	    }
+	
+	    int CompareTimestamp(const rocksdb::Slice& ts1, const rocksdb::Slice& ts2) const override {
+	      if (!ts1.data() && !ts2.data()) {
+	        return 0;
+	      } else if (ts1.data() && !ts2.data()) {
+	        return 1;
+	      } else if (!ts1.data() && ts2.data()) {
+	        return -1;
+	      }
+	      assert(ts1.size() == ts2.size());
+	      uint64_t high1 = 0;
+	      uint64_t high2 = 0;
+	      auto* ptr1 = const_cast<rocksdb::Slice*>(&ts1);
+	      auto* ptr2 = const_cast<rocksdb::Slice*>(&ts2);
+	      if (!GetFixed64(ptr1, &high1) || !GetFixed64(ptr2, &high2)) {
+	        assert(false);
+	      }
+	      if (high1 < high2) {
+	        return 1;
+	      } else if (high1 > high2) {
+	        return -1;
+	      }
+	      return 0;
+	    }
+	  };
+    
     // Same as rocksdb::Iterator, but adds couple more useful functions
     class RocksIterator : public rocksdb::Iterator {
     public:
@@ -200,6 +264,9 @@ namespace mongo {
 
         bool _readFromMajorityCommittedSnapshot = false;
         bool _areWriteUnitOfWorksBanned = false;
+
+        std::vector<rocksdb::Slice> _timestamps;
     };
 
+    extern const rocksdb::Comparator* TimestampComparator();
 }

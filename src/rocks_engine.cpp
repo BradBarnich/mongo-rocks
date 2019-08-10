@@ -166,7 +166,8 @@ namespace mongo {
     }  // anonymous namespace
 
     // first four bytes are the default prefix 0
-    const std::string RocksEngine::kMetadataPrefix("\0\0\0\0metadata-", 12);
+    const std::string RocksEngine::kMetadataPrefix("\0\0\0\0metadata", 12);
+    const std::string RocksEngine::kMetadataPrefixWithTimestamp("\0\0\0\0metadata\0\0\0\0\0\0\0\0", 20);
 
     RocksEngine::RocksEngine(const std::string& path, bool durable, int formatVersion,
                              bool readOnly)
@@ -227,11 +228,12 @@ namespace mongo {
         // current _maxPrefix
         {
             stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
-            for (iter->Seek(kMetadataPrefix);
+            for (iter->Seek(kMetadataPrefixWithTimestamp);
                  iter->Valid() && iter->key().starts_with(kMetadataPrefix); iter->Next()) {
                 invariantRocksOK(iter->status());
                 rocksdb::Slice ident(iter->key());
                 ident.remove_prefix(kMetadataPrefix.size());
+                ident.remove_suffix(sizeof(uint64_t));
                 // this could throw DBException, which then means DB corruption. We just let it fly
                 // to the caller
                 BSONObj identConfig(iter->value().data());
@@ -311,8 +313,11 @@ namespace mongo {
             // we also need to write out the new prefix to the database. this is just an
             // optimization
             std::string encodedPrefix(encodePrefix(oplogTrackerPrefix));
+            rocksdb::WriteOptions writeOptions;
+            auto writeTs = rocksdb::Slice(encodeTimestamp(0ULL));
+            writeOptions.timestamp = &writeTs;
             s = rocksToMongoStatus(
-                _db->Put(rocksdb::WriteOptions(), encodedPrefix, rocksdb::Slice()));
+                _db->Put(writeOptions, encodedPrefix, rocksdb::Slice()));
         }
         return s;
     }
@@ -529,14 +534,16 @@ namespace mongo {
         }
 
         BSONObjBuilder builder;
-
-        auto s = _db->Put(rocksdb::WriteOptions(), kMetadataPrefix + ident.toString(),
+        rocksdb::WriteOptions writeOptions;
+        auto writeTs = rocksdb::Slice(encodeTimestamp(0ULL));
+        writeOptions.timestamp = &writeTs;
+        auto s = _db->Put(writeOptions, kMetadataPrefix + ident.toString(),
                           rocksdb::Slice(config.objdata(), config.objsize()));
 
         if (s.ok()) {
             // As an optimization, add a key <prefix> to the DB
             std::string encodedPrefix(encodePrefix(prefix));
-            s = _db->Put(rocksdb::WriteOptions(), encodedPrefix, rocksdb::Slice());
+            s = _db->Put(writeOptions, encodedPrefix, rocksdb::Slice());
         }
 
         return rocksToMongoStatus(s);
@@ -568,7 +575,7 @@ namespace mongo {
         table_options.block_cache = _block_cache;
         table_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, false));
         table_options.block_size = 16 * 1024; // 16KB
-        table_options.format_version = 2;
+        table_options.format_version = 4;
         options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
         options.write_buffer_size = 64 * 1024 * 1024;  // 64MB
@@ -627,6 +634,9 @@ namespace mongo {
                 invariantRocksOK(s);
             }
         }
+
+        options.comparator = TimestampComparator();
+        
 
         return options;
     }

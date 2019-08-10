@@ -72,13 +72,16 @@ namespace mongo {
                   _prefix(std::move(prefix)),
                   _nextPrefix(rocksGetNextPrefix(_prefix)),
                   _prefixSlice(_prefix.data(), _prefix.size()),
-                  _prefixSliceEpsilon(_prefix.data(), _prefix.size() + 1),
+                  _prefixEpsilon(_prefix),
                   _baseIterator(baseIterator),
                   _compactionScheduler(compactionScheduler),
                   _upperBound(std::move(upperBound)) {
-                *_upperBound.get() = rocksdb::Slice(_nextPrefix);
+                
+                _prefixEpsilon.append(sizeof(uint64_t) + 1, '\0');
+                _prefixSliceEpsilon = rocksdb::Slice(_prefixEpsilon.data(), _prefixEpsilon.size());
+                _nextPrefix.append(sizeof(uint64_t), '\0'); 
+                *_upperBound.get() = rocksdb::Slice(_nextPrefix.data(), _nextPrefix.size());
             }
-
             ~PrefixStrippingIterator() {}
 
             virtual bool Valid() const {
@@ -95,8 +98,8 @@ namespace mongo {
             virtual void SeekToLast() {
                 startOp();
                 // we can't have upper bound set to _nextPrefix since we need to seek to it
-                *_upperBound.get() = rocksdb::Slice("\xFF\xFF\xFF\xFF");
-                _baseIterator->Seek(_nextPrefix);
+                *_upperBound.get() = rocksdb::Slice("\xFF\xFF\xFF\xFF\0\0\0\0\0\0\0\0");
+                _baseIterator->Seek(rocksdb::Slice(_nextPrefix));
                 // reset back to original value
                 *_upperBound.get() = rocksdb::Slice(_nextPrefix);
                 if (!_baseIterator->Valid()) {
@@ -137,7 +140,7 @@ namespace mongo {
             virtual rocksdb::Slice key() const {
                 rocksdb::Slice strippedKey = _baseIterator->key();
                 strippedKey.remove_prefix(_prefix.size());
-                return strippedKey;
+                return StripTimestampFromUserKey(strippedKey);
             }
             virtual rocksdb::Slice value() const { return _baseIterator->value(); }
             virtual rocksdb::Status status() const { return _baseIterator->status(); }
@@ -147,14 +150,14 @@ namespace mongo {
             // This Seek is specific because it will succeed only if it finds a key with `target`
             // prefix. If there is no such key, it will be !Valid()
             virtual void SeekPrefix(const rocksdb::Slice& target) {
-                std::unique_ptr<char[]> buffer(new char[_prefix.size() + target.size()]);
+                std::unique_ptr<char[]> buffer(new char[_prefix.size() + target.size() + sizeof(uint64_t)]);
                 memcpy(buffer.get(), _prefix.data(), _prefix.size());
                 memcpy(buffer.get() + _prefix.size(), target.data(), target.size());
 
                 std::string tempUpperBound = rocksGetNextPrefix(
                     rocksdb::Slice(buffer.get(), _prefix.size() + target.size()));
 
-                *_upperBound.get() = rocksdb::Slice(tempUpperBound);
+                *_upperBound.get() = rocksdb::Slice(tempUpperBound.data(), tempUpperBound.size() + sizeof(uint64_t));
                 if (target.size() == 0) {
                     // if target is empty, we'll try to seek to <prefix>, which is not good
                     _baseIterator->Seek(_prefixSliceEpsilon);
@@ -194,6 +197,7 @@ namespace mongo {
             std::string _nextPrefix;
             rocksdb::Slice _prefixSlice;
             // the first possible key bigger than prefix. we use this for SeekToFirst()
+            std::string _prefixEpsilon;
             rocksdb::Slice _prefixSliceEpsilon;
             std::unique_ptr<Iterator> _baseIterator;
 
@@ -221,7 +225,7 @@ namespace mongo {
           _durabilityManager(durabilityManager),
           _durable(durable),
           _transaction(transactionEngine),
-          _writeBatch(rocksdb::BytewiseComparator(), 0, true, 0, sizeof(uint64_t) ),
+          _writeBatch(TimestampComparator(), 0, true, 0, sizeof(uint64_t) ),
           _snapshot(nullptr),
           _preparedSnapshot(nullptr),
           _mySnapshotId(nextSnapshotId.fetchAndAdd(1)) {
@@ -271,6 +275,7 @@ namespace mongo {
     void RocksRecoveryUnit::abandonSnapshot() {
         _deltaCounters.clear();
         _writeBatch.Clear();
+        _timestamps.clear();
         _releaseSnapshot();
         _areWriteUnitOfWorksBanned = false;
     }
@@ -323,6 +328,7 @@ namespace mongo {
 
     void RocksRecoveryUnit::_commit() {
         rocksdb::WriteBatch* wb = _writeBatch.GetWriteBatch();
+        wb->AssignTimestamp(encodeTimestamp(1ULL));
         for (auto pair : _deltaCounters) {
             auto& counter = pair.second;
             counter._value->fetch_add(counter._delta, std::memory_order::memory_order_relaxed);
@@ -341,6 +347,8 @@ namespace mongo {
         }
         _deltaCounters.clear();
         _writeBatch.Clear();
+        _timestamps.clear();
+        //_db->Flush(rocksdb::FlushOptions());
     }
 
     void RocksRecoveryUnit::_abort() {
@@ -359,6 +367,7 @@ namespace mongo {
 
         _deltaCounters.clear();
         _writeBatch.Clear();
+        _timestamps.clear();
 
         _releaseSnapshot();
     }
@@ -398,8 +407,11 @@ namespace mongo {
     rocksdb::Status RocksRecoveryUnit::Get(const rocksdb::Slice& key, std::string* value) {
         if (_writeBatch.GetWriteBatch()->Count() > 0) {
             std::unique_ptr<rocksdb::WBWIIterator> wb_iterator(_writeBatch.NewIterator());
-            wb_iterator->Seek(key);
-            if (wb_iterator->Valid() && wb_iterator->Entry().key == key) {
+            auto keyString = std::string(key.data(), key.size());
+            keyString.append(sizeof(uint64_t), '\0');
+            auto keyWithTimestamp = rocksdb::Slice(keyString);
+            wb_iterator->Seek(keyWithTimestamp);
+            if (wb_iterator->Valid() && wb_iterator->Entry().key == keyWithTimestamp) {
                 const auto& entry = wb_iterator->Entry();
                 if (entry.type == rocksdb::WriteType::kDeleteRecord) {
                     return rocksdb::Status::NotFound();
@@ -411,18 +423,12 @@ namespace mongo {
         rocksdb::ReadOptions options;
         options.snapshot = snapshot();
         rocksdb::Slice readTs;
-        uint64_t maxTs = ULLONG_MAX;
         if (_readFromMajorityCommittedSnapshot) {
-            readTs = rocksdb::Slice(reinterpret_cast<const char*>(*_snapshotManager->getCommittedSnapshot()),sizeof(uint64_t));
-            options.timestamp = &readTs;
+            readTs = rocksdb::Slice(encodeTimestamp(*_snapshotManager->getCommittedSnapshot()));
         } else {
-            readTs = rocksdb::Slice(reinterpret_cast<const char*>(&maxTs),sizeof(uint64_t));
-            options.timestamp = &readTs;
-        //     if (_snapshotHolder.get() == nullptr) {
-        //         _snapshotHolder = _snapshotManager->getCommittedSnapshot();
-        //     }
-        //     return _snapshotHolder->snapshot;
+            readTs = rocksdb::Slice(encodeTimestamp(ULLONG_MAX));
         }
+        options.timestamp = &readTs;
         return _db->Get(options, key, value);
     }
 
@@ -477,5 +483,10 @@ namespace mongo {
 
     RocksRecoveryUnit* RocksRecoveryUnit::getRocksRecoveryUnit(OperationContext* opCtx) {
         return checked_cast<RocksRecoveryUnit*>(opCtx->recoveryUnit());
+    }
+
+    const rocksdb::Comparator* TimestampComparator() {
+      static TimestampComparatorImpl timestamp;
+      return &timestamp;
     }
 }
