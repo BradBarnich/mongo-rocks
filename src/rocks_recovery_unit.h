@@ -147,25 +147,46 @@ namespace mongo {
                           RocksCounterManager* counterManager,
                           RocksCompactionScheduler* compactionScheduler,
                           RocksDurabilityManager* durabilityManager, bool durable);
-        virtual ~RocksRecoveryUnit();
+        ~RocksRecoveryUnit();
 
-        virtual void beginUnitOfWork(OperationContext* opCtx);
-        virtual void commitUnitOfWork();
-        virtual void abortUnitOfWork();
+        void beginUnitOfWork(OperationContext* opCtx);
+        void commitUnitOfWork();
+        void abortUnitOfWork();
 
-        virtual bool waitUntilDurable();
+        bool waitUntilDurable();
 
-        virtual void abandonSnapshot();
+        void abandonSnapshot();
 
         Status obtainMajorityCommittedSnapshot() override;
 
         boost::optional<Timestamp> getPointInTimeReadTimestamp() override;
 
-        virtual void registerChange(Change* change);
+        SnapshotId getSnapshotId() const override;
 
-        virtual void setOrderedCommit(bool orderedCommit) override {};
+        Status setTimestamp(Timestamp timestamp) override;
 
-        virtual SnapshotId getSnapshotId() const;
+        void setCommitTimestamp(Timestamp timestamp) override;
+
+        void clearCommitTimestamp() override;
+
+        Timestamp getCommitTimestamp() const override;
+
+        void setDurableTimestamp(Timestamp timestamp) override;
+
+        Timestamp getDurableTimestamp() const override;
+
+        void setPrepareTimestamp(Timestamp timestamp) override;
+
+        Timestamp getPrepareTimestamp() const override;
+
+        void setTimestampReadSource(ReadSource source,
+                                boost::optional<Timestamp> provided = boost::none) override;
+
+        ReadSource getTimestampReadSource() const override;
+
+        void registerChange(Change* change);
+
+        void setOrderedCommit(bool orderedCommit) override {};
 
         // local api
 
@@ -266,6 +287,14 @@ namespace mongo {
         bool _areWriteUnitOfWorksBanned = false;
 
         std::vector<rocksdb::Slice> _timestamps;
+
+        Timestamp _commitTimestamp;
+        Timestamp _durableTimestamp;
+        Timestamp _prepareTimestamp;
+        boost::optional<Timestamp> _lastTimestampSet;
+        Timestamp _readAtTimestamp;
+
+        ReadSource _timestampReadSource = ReadSource::kUnset;
     };
 
     extern const rocksdb::Comparator* TimestampComparator();

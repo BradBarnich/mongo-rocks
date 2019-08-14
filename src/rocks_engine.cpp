@@ -167,7 +167,6 @@ namespace mongo {
 
     // first four bytes are the default prefix 0
     const std::string RocksEngine::kMetadataPrefix("\0\0\0\0metadata", 12);
-    const std::string RocksEngine::kMetadataPrefixWithTimestamp("\0\0\0\0metadata\0\0\0\0\0\0\0\0", 20);
 
     RocksEngine::RocksEngine(const std::string& path, bool durable, int formatVersion,
                              bool readOnly)
@@ -228,7 +227,7 @@ namespace mongo {
         // current _maxPrefix
         {
             stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
-            for (iter->Seek(kMetadataPrefixWithTimestamp);
+            for (iter->Seek(kMetadataPrefix);
                  iter->Valid() && iter->key().starts_with(kMetadataPrefix); iter->Next()) {
                 invariantRocksOK(iter->status());
                 rocksdb::Slice ident(iter->key());
@@ -535,7 +534,8 @@ namespace mongo {
 
         BSONObjBuilder builder;
         rocksdb::WriteOptions writeOptions;
-        auto writeTs = rocksdb::Slice(encodeTimestamp(0ULL));
+        auto writeString = encodeTimestamp(0ULL);
+        auto writeTs = rocksdb::Slice(writeString);
         writeOptions.timestamp = &writeTs;
         auto s = _db->Put(writeOptions, kMetadataPrefix + ident.toString(),
                           rocksdb::Slice(config.objdata(), config.objsize()));
@@ -598,24 +598,25 @@ namespace mongo {
         // Enable concurrent memtable
         options.allow_concurrent_memtable_write = true;
         options.enable_write_thread_adaptive_yield = true;
-
-        options.compression_per_level.resize(3);
-        options.compression_per_level[0] = rocksdb::kNoCompression;
-        options.compression_per_level[1] = rocksdb::kNoCompression;
-        if (rocksGlobalOptions.compression == "snappy") {
-            options.compression_per_level[2] = rocksdb::kSnappyCompression;
-        } else if (rocksGlobalOptions.compression == "zlib") {
-            options.compression_per_level[2] = rocksdb::kZlibCompression;
-        } else if (rocksGlobalOptions.compression == "none") {
-            options.compression_per_level[2] = rocksdb::kNoCompression;
-        } else if (rocksGlobalOptions.compression == "lz4") {
-            options.compression_per_level[2] = rocksdb::kLZ4Compression;
-        } else if (rocksGlobalOptions.compression == "lz4hc") {
-            options.compression_per_level[2] = rocksdb::kLZ4HCCompression;
-        } else {
-            log() << "Unknown compression, will use default (snappy)";
-            options.compression_per_level[2] = rocksdb::kSnappyCompression;
-        }
+        options.compression = rocksdb::kLZ4Compression;
+        // options.compression_per_level.resize(3);
+        // options.compression_per_level[0] = rocksdb::kNoCompression;
+        // options.compression_per_level[1] = rocksdb::kNoCompression;
+        // if (rocksGlobalOptions.compression == "snappy") {
+        //     options.compression_per_level[2] = rocksdb::kSnappyCompression;
+        // } else if (rocksGlobalOptions.compression == "zlib") {
+        //     options.compression_per_level[2] = rocksdb::kZlibCompression;
+        // } else if (rocksGlobalOptions.compression == "none") {
+        //     options.compression_per_level[2] = rocksdb::kNoCompression;
+        // } else if (rocksGlobalOptions.compression == "lz4") {
+        //     options.compression_per_level[2] = rocksdb::kLZ4Compression;
+        // } else if (rocksGlobalOptions.compression == "lz4hc") {
+        //     options.compression_per_level[2] = rocksdb::kLZ4HCCompression;
+        // } else {
+        //     log() << "Unknown compression, will use default (zstd)";
+        //     options.compression_per_level[2] = rocksdb::kZSTD;
+        // }
+        options.bottommost_compression = rocksdb::kZSTD;
 
         options.statistics = _statistics;
 

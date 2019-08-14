@@ -688,7 +688,10 @@ namespace mongo {
         } else {
             loc = _nextId();
         }
-
+        auto status = ru->setTimestamp(timestamp);
+        if (!status.isOK()) {
+            return status;
+        } 
         // No need to register the write here, since we just allocated a new RecordId so no other
         // transaction can access this key before we commit
         ru->writeBatch()->Put(_makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len));

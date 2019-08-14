@@ -67,7 +67,8 @@ namespace mongo {
             // baseIterator is consumed
             PrefixStrippingIterator(std::string prefix, Iterator* baseIterator,
                                     RocksCompactionScheduler* compactionScheduler,
-                                    std::unique_ptr<rocksdb::Slice> upperBound)
+                                    std::unique_ptr<rocksdb::Slice> upperBound,
+                                    std::unique_ptr<rocksdb::Slice> timestamp)
                 : _rocksdbSkippedDeletionsInitial(0),
                   _prefix(std::move(prefix)),
                   _nextPrefix(rocksGetNextPrefix(_prefix)),
@@ -75,9 +76,10 @@ namespace mongo {
                   _prefixEpsilon(_prefix),
                   _baseIterator(baseIterator),
                   _compactionScheduler(compactionScheduler),
-                  _upperBound(std::move(upperBound)) {
+                  _upperBound(std::move(upperBound)),
+                  _timestamp(std::move(timestamp)) {
                 
-                _prefixEpsilon.append(sizeof(uint64_t) + 1, '\0');
+                //_prefixEpsilon.append(sizeof(uint64_t) + 1, '\0');
                 _prefixSliceEpsilon = rocksdb::Slice(_prefixEpsilon.data(), _prefixEpsilon.size());
                 _nextPrefix.append(sizeof(uint64_t), '\0'); 
                 *_upperBound.get() = rocksdb::Slice(_nextPrefix.data(), _nextPrefix.size());
@@ -99,7 +101,7 @@ namespace mongo {
                 startOp();
                 // we can't have upper bound set to _nextPrefix since we need to seek to it
                 *_upperBound.get() = rocksdb::Slice("\xFF\xFF\xFF\xFF\0\0\0\0\0\0\0\0");
-                _baseIterator->Seek(rocksdb::Slice(_nextPrefix));
+                _baseIterator->Seek(rocksdb::Slice(_nextPrefix.data(), _nextPrefix.size() - sizeof(uint64_t)));
                 // reset back to original value
                 *_upperBound.get() = rocksdb::Slice(_nextPrefix);
                 if (!_baseIterator->Valid()) {
@@ -205,6 +207,7 @@ namespace mongo {
             RocksCompactionScheduler* _compactionScheduler;  // not owned
 
             std::unique_ptr<rocksdb::Slice> _upperBound;
+            std::unique_ptr<rocksdb::Slice> _timestamp;
         };
 
     }  // anonymous namespace
@@ -252,7 +255,7 @@ namespace mongo {
         try {
             for (Changes::const_iterator it = _changes.begin(), end = _changes.end(); it != end;
                     ++it) {
-                (*it)->commit(boost::none);
+                (*it)->commit(_lastTimestampSet);
             }
             _changes.clear();
         }
@@ -328,7 +331,8 @@ namespace mongo {
 
     void RocksRecoveryUnit::_commit() {
         rocksdb::WriteBatch* wb = _writeBatch.GetWriteBatch();
-        wb->AssignTimestamp(encodeTimestamp(1ULL));
+        auto writeTs = _lastTimestampSet.value_or(Timestamp()).asULL();
+        wb->AssignTimestamp(encodeTimestamp(writeTs));
         for (auto pair : _deltaCounters) {
             auto& counter = pair.second;
             counter._value->fetch_add(counter._delta, std::memory_order::memory_order_relaxed);
@@ -348,7 +352,8 @@ namespace mongo {
         _deltaCounters.clear();
         _writeBatch.Clear();
         _timestamps.clear();
-        //_db->Flush(rocksdb::FlushOptions());
+        _lastTimestampSet = boost::none;
+        _db->Flush(rocksdb::FlushOptions());
     }
 
     void RocksRecoveryUnit::_abort() {
@@ -434,23 +439,35 @@ namespace mongo {
 
     RocksIterator* RocksRecoveryUnit::NewIterator(std::string prefix, bool isOplog) {
         std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
+        std::unique_ptr<rocksdb::Slice> readTs(new rocksdb::Slice());
         rocksdb::ReadOptions options;
         options.iterate_upper_bound = upperBound.get();
         options.snapshot = snapshot();
+        if (_readFromMajorityCommittedSnapshot) {
+            *readTs.get() = rocksdb::Slice(encodeTimestamp(*_snapshotManager->getCommittedSnapshot()));
+        } else {
+            *readTs.get() = rocksdb::Slice(encodeTimestamp(ULLONG_MAX));
+        }
+        options.timestamp = readTs.get();
         auto iterator = _writeBatch.NewIteratorWithBase(_db->NewIterator(options));
         auto prefixIterator = new PrefixStrippingIterator(std::move(prefix), iterator,
                                                           isOplog ? nullptr : _compactionScheduler,
-                                                          std::move(upperBound));
+                                                          std::move(upperBound),
+                                                          std::move(readTs));
         return prefixIterator;
     }
 
     RocksIterator* RocksRecoveryUnit::NewIteratorNoSnapshot(rocksdb::DB* db, std::string prefix) {
         std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
+        std::unique_ptr<rocksdb::Slice> readTs(new rocksdb::Slice());
+         *readTs.get() = rocksdb::Slice(encodeTimestamp(ULLONG_MAX));
         rocksdb::ReadOptions options;
         options.iterate_upper_bound = upperBound.get();
+        options.timestamp = readTs.get();
         auto iterator = db->NewIterator(options);
         return new PrefixStrippingIterator(std::move(prefix), iterator, nullptr,
-                                           std::move(upperBound));
+                                           std::move(upperBound),
+                                           std::move(readTs));
     }
 
     void RocksRecoveryUnit::incrementCounter(const rocksdb::Slice& counterKey,
@@ -488,5 +505,114 @@ namespace mongo {
     const rocksdb::Comparator* TimestampComparator() {
       static TimestampComparatorImpl timestamp;
       return &timestamp;
+    }
+
+    Status RocksRecoveryUnit::setTimestamp(Timestamp timestamp) {
+        LOG(3) << "RocksDb set timestamp of future write operations to " << timestamp;
+        invariant(_prepareTimestamp.isNull());
+        invariant(_commitTimestamp.isNull(),
+                str::stream() << "Commit timestamp set to " << _commitTimestamp.toString()
+                                << " and trying to set WUOW timestamp to "
+                                << timestamp.toString());
+        invariant(_readAtTimestamp.isNull() || timestamp >= _readAtTimestamp,
+                str::stream() << "future commit timestamp " << timestamp.toString()
+                                << " cannot be older than read timestamp "
+                                << _readAtTimestamp.toString());
+
+        _lastTimestampSet = timestamp;
+
+        return Status::OK();
+    }
+
+    void RocksRecoveryUnit::setCommitTimestamp(Timestamp timestamp) {
+        // This can be called either outside of a WriteUnitOfWork or in a prepared transaction after
+        // setPrepareTimestamp() is called. Prepared transactions ensure the correct timestamping
+        // semantics and the set-once commitTimestamp behavior is exactly what prepared transactions
+        // want.
+        invariant(_commitTimestamp.isNull(),
+                str::stream() << "Commit timestamp set to " << _commitTimestamp.toString()
+                                << " and trying to set it to "
+                                << timestamp.toString());
+        invariant(!_lastTimestampSet,
+                str::stream() << "Last timestamp set is " << _lastTimestampSet->toString()
+                                << " and trying to set commit timestamp to "
+                                << timestamp.toString());
+
+        _commitTimestamp = timestamp;
+    }
+
+    Timestamp RocksRecoveryUnit::getCommitTimestamp() const {
+        return _commitTimestamp;
+    }
+
+    void RocksRecoveryUnit::setDurableTimestamp(Timestamp timestamp) {
+        invariant(
+            _durableTimestamp.isNull(),
+            str::stream() << "Trying to reset durable timestamp when it was already set. wasSetTo: "
+                        << _durableTimestamp.toString()
+                        << " setTo: "
+                        << timestamp.toString());
+
+        _durableTimestamp = timestamp;
+    }
+
+    Timestamp RocksRecoveryUnit::getDurableTimestamp() const {
+        return _durableTimestamp;
+    }
+
+    void RocksRecoveryUnit::clearCommitTimestamp() {
+        invariant(!_commitTimestamp.isNull());
+        invariant(!_lastTimestampSet,
+                str::stream() << "Last timestamp set is " << _lastTimestampSet->toString()
+                                << " and trying to clear commit timestamp.");
+
+        _commitTimestamp = Timestamp();
+    }
+
+    void RocksRecoveryUnit::setPrepareTimestamp(Timestamp timestamp) {
+        invariant(_prepareTimestamp.isNull(),
+                str::stream() << "Trying to set prepare timestamp to " << timestamp.toString()
+                                << ". It's already set to "
+                                << _prepareTimestamp.toString());
+        invariant(_commitTimestamp.isNull(),
+                str::stream() << "Commit timestamp is " << _commitTimestamp.toString()
+                                << " and trying to set prepare timestamp to "
+                                << timestamp.toString());
+        invariant(!_lastTimestampSet,
+                str::stream() << "Last timestamp set is " << _lastTimestampSet->toString()
+                                << " and trying to set prepare timestamp to "
+                                << timestamp.toString());
+
+        _prepareTimestamp = timestamp;
+    }
+
+    Timestamp RocksRecoveryUnit::getPrepareTimestamp() const {
+        invariant(!_prepareTimestamp.isNull());
+        invariant(_commitTimestamp.isNull(),
+                str::stream() << "Commit timestamp is " << _commitTimestamp.toString()
+                                << " and trying to get prepare timestamp of "
+                                << _prepareTimestamp.toString());
+        invariant(!_lastTimestampSet,
+                str::stream() << "Last timestamp set is " << _lastTimestampSet->toString()
+                                << " and trying to get prepare timestamp of "
+                                << _prepareTimestamp.toString());
+
+        return _prepareTimestamp;
+    }
+
+    void RocksRecoveryUnit::setTimestampReadSource(ReadSource readSource,
+                                                        boost::optional<Timestamp> provided) {
+        LOG(3) << "setting timestamp read source: " << static_cast<int>(readSource)
+            << ", provided timestamp: " << ((provided) ? provided->toString() : "none");
+
+        invariant(!provided == (readSource != ReadSource::kProvided));
+        invariant(!(provided && provided->isNull()));
+
+        _timestampReadSource = readSource;
+        _readAtTimestamp = (provided) ? *provided : Timestamp();
+    }
+
+    RecoveryUnit::ReadSource RocksRecoveryUnit::getTimestampReadSource() const {
+        return _timestampReadSource;
     }
 }
