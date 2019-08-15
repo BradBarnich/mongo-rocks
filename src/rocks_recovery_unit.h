@@ -283,7 +283,7 @@ namespace mongo {
         // should be shared here to ensure that it is not released early
         std::shared_ptr<RocksSnapshotManager::SnapshotHolder> _snapshotHolder;
 
-        bool _readFromMajorityCommittedSnapshot = false;
+        boost::optional<uint64_t> _readFromMajorityCommittedSnapshot;
         bool _areWriteUnitOfWorksBanned = false;
 
         std::vector<rocksdb::Slice> _timestamps;

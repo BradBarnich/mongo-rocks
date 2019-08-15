@@ -166,7 +166,8 @@ namespace mongo {
     }  // anonymous namespace
 
     // first four bytes are the default prefix 0
-    const std::string RocksEngine::kMetadataPrefix("\0\0\0\0metadata", 12);
+    const std::string RocksEngine::kMetadataPrefix("\0\0\0\0metadata-", 13);
+    const std::string RocksEngine::kMetadataPrefixWithTimestamp("\0\0\0\0metadata-\0\0\0\0\0\0\0\0", 21);
 
     RocksEngine::RocksEngine(const std::string& path, bool durable, int formatVersion,
                              bool readOnly)
@@ -227,7 +228,7 @@ namespace mongo {
         // current _maxPrefix
         {
             stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
-            for (iter->Seek(kMetadataPrefix);
+            for (iter->Seek(kMetadataPrefixWithTimestamp);
                  iter->Valid() && iter->key().starts_with(kMetadataPrefix); iter->Next()) {
                 invariantRocksOK(iter->status());
                 rocksdb::Slice ident(iter->key());
@@ -313,7 +314,8 @@ namespace mongo {
             // optimization
             std::string encodedPrefix(encodePrefix(oplogTrackerPrefix));
             rocksdb::WriteOptions writeOptions;
-            auto writeTs = rocksdb::Slice(encodeTimestamp(0ULL));
+            auto timestamp = encodeTimestamp(0ULL);
+            auto writeTs = rocksdb::Slice(timestamp.data(), timestamp.size());
             writeOptions.timestamp = &writeTs;
             s = rocksToMongoStatus(
                 _db->Put(writeOptions, encodedPrefix, rocksdb::Slice()));

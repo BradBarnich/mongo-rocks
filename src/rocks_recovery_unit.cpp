@@ -68,7 +68,7 @@ namespace mongo {
             PrefixStrippingIterator(std::string prefix, Iterator* baseIterator,
                                     RocksCompactionScheduler* compactionScheduler,
                                     std::unique_ptr<rocksdb::Slice> upperBound,
-                                    std::unique_ptr<rocksdb::Slice> timestamp)
+                                    std::string timestamp, std::unique_ptr<rocksdb::Slice> timestampSlice )
                 : _rocksdbSkippedDeletionsInitial(0),
                   _prefix(std::move(prefix)),
                   _nextPrefix(rocksGetNextPrefix(_prefix)),
@@ -77,12 +77,14 @@ namespace mongo {
                   _baseIterator(baseIterator),
                   _compactionScheduler(compactionScheduler),
                   _upperBound(std::move(upperBound)),
-                  _timestamp(std::move(timestamp)) {
+                  _timestamp(std::move(timestamp)),
+                  _timestampSlice(std::move(timestampSlice)) {
                 
-                //_prefixEpsilon.append(sizeof(uint64_t) + 1, '\0');
+                _prefixEpsilon.append(sizeof(uint64_t) + 1, '\0');
                 _prefixSliceEpsilon = rocksdb::Slice(_prefixEpsilon.data(), _prefixEpsilon.size());
                 _nextPrefix.append(sizeof(uint64_t), '\0'); 
                 *_upperBound.get() = rocksdb::Slice(_nextPrefix.data(), _nextPrefix.size());
+                *_timestampSlice.get() = rocksdb::Slice(_timestamp.data(), _timestamp.size());
             }
             ~PrefixStrippingIterator() {}
 
@@ -101,7 +103,7 @@ namespace mongo {
                 startOp();
                 // we can't have upper bound set to _nextPrefix since we need to seek to it
                 *_upperBound.get() = rocksdb::Slice("\xFF\xFF\xFF\xFF\0\0\0\0\0\0\0\0");
-                _baseIterator->Seek(rocksdb::Slice(_nextPrefix.data(), _nextPrefix.size() - sizeof(uint64_t)));
+                _baseIterator->Seek(rocksdb::Slice(_nextPrefix.data(), _nextPrefix.size()));
                 // reset back to original value
                 *_upperBound.get() = rocksdb::Slice(_nextPrefix);
                 if (!_baseIterator->Valid()) {
@@ -115,10 +117,10 @@ namespace mongo {
 
             virtual void Seek(const rocksdb::Slice& target) {
                 startOp();
-                std::unique_ptr<char[]> buffer(new char[_prefix.size() + target.size()]);
+                std::unique_ptr<char[]> buffer(new char[_prefix.size() + target.size() + sizeof(uint64_t)]);
                 memcpy(buffer.get(), _prefix.data(), _prefix.size());
                 memcpy(buffer.get() + _prefix.size(), target.data(), target.size());
-                _baseIterator->Seek(rocksdb::Slice(buffer.get(), _prefix.size() + target.size()));
+                _baseIterator->Seek(rocksdb::Slice(buffer.get(), _prefix.size() + target.size() + sizeof(uint64_t)));
                 endOp();
             }
 
@@ -165,7 +167,7 @@ namespace mongo {
                     _baseIterator->Seek(_prefixSliceEpsilon);
                 } else {
                     _baseIterator->Seek(
-                        rocksdb::Slice(buffer.get(), _prefix.size() + target.size()));
+                        rocksdb::Slice(buffer.get(), _prefix.size() + target.size() + sizeof(uint64_t)));
                 }
                 // reset back to original value
                 *_upperBound.get() = rocksdb::Slice(_nextPrefix);
@@ -207,7 +209,9 @@ namespace mongo {
             RocksCompactionScheduler* _compactionScheduler;  // not owned
 
             std::unique_ptr<rocksdb::Slice> _upperBound;
-            std::unique_ptr<rocksdb::Slice> _timestamp;
+
+            std::string _timestamp;
+            std::unique_ptr<rocksdb::Slice> _timestampSlice;
         };
 
     }  // anonymous namespace
@@ -290,20 +294,42 @@ namespace mongo {
     void RocksRecoveryUnit::registerChange(Change* change) { _changes.push_back(change); }
 
     Status RocksRecoveryUnit::obtainMajorityCommittedSnapshot() {
+        invariant(_timestampReadSource == ReadSource::kMajorityCommitted);
+
         if (!_snapshotManager->haveCommittedSnapshot()) {
             return {ErrorCodes::ReadConcernMajorityNotAvailableYet,
                     "Read concern majority reads are currently not possible."};
         }
         invariant(_snapshot == nullptr);
 
-        _readFromMajorityCommittedSnapshot = true;
+        _readFromMajorityCommittedSnapshot = _snapshotManager->getCommittedSnapshot();
         return Status::OK();
     }
 
     boost::optional<Timestamp> RocksRecoveryUnit::getPointInTimeReadTimestamp() {
-        if (!_readFromMajorityCommittedSnapshot)
-            return {};
-        return Timestamp(*_snapshotManager->getCommittedSnapshot());
+        // After a ReadSource has been set on this RecoveryUnit, callers expect that this method returns
+        // the read timestamp that will be used for current or future transactions. Because callers use
+        // this timestamp to inform visiblity of operations, it is therefore necessary to open a
+        // transaction to establish a read timestamp, but only for ReadSources that are expected to have
+        // read timestamps.
+        switch (_timestampReadSource) {
+            case ReadSource::kUnset:
+            case ReadSource::kNoTimestamp:
+                return boost::none;
+            case ReadSource::kMajorityCommitted:
+                // This ReadSource depends on a previous call to obtainMajorityCommittedSnapshot() and
+                // does not require an open transaction to return a valid timestamp.
+                invariant(_readFromMajorityCommittedSnapshot);
+                return Timestamp(*_readFromMajorityCommittedSnapshot);
+            case ReadSource::kProvided:
+                // The read timestamp is set by the user and does not require a transaction to be open.
+                invariant(!_readAtTimestamp.isNull());
+                return _readAtTimestamp;
+            case ReadSource::kLastApplied:
+            case ReadSource::kNoOverlap:
+            case ReadSource::kAllCommittedSnapshot:
+                MONGO_UNREACHABLE;
+        }
     }
 
     SnapshotId RocksRecoveryUnit::getSnapshotId() const { return SnapshotId(_mySnapshotId); }
@@ -325,6 +351,7 @@ namespace mongo {
             _snapshot = nullptr;
         }
         _snapshotHolder.reset();
+        _readFromMajorityCommittedSnapshot.reset();
 
         _mySnapshotId = nextSnapshotId.fetchAndAdd(1);
     }
@@ -393,12 +420,6 @@ namespace mongo {
             _timer.reset(new Timer());
         }
 
-        // if (_readFromMajorityCommittedSnapshot) {
-        //     if (_snapshotHolder.get() == nullptr) {
-        //         _snapshotHolder = _snapshotManager->getCommittedSnapshot();
-        //     }
-        //     return _snapshotHolder->snapshot;
-        // }
         if (!_snapshot) {
             // RecoveryUnit might be used for writing, so we need to call recordSnapshotId().
             // Order of operations here is important. It needs to be synchronized with
@@ -427,47 +448,52 @@ namespace mongo {
         }
         rocksdb::ReadOptions options;
         options.snapshot = snapshot();
-        rocksdb::Slice readTs;
+        std::string timestamp;
         if (_readFromMajorityCommittedSnapshot) {
-            readTs = rocksdb::Slice(encodeTimestamp(*_snapshotManager->getCommittedSnapshot()));
+            timestamp = encodeTimestamp(*_readFromMajorityCommittedSnapshot);
         } else {
-            readTs = rocksdb::Slice(encodeTimestamp(ULLONG_MAX));
+            timestamp = encodeTimestamp(ULLONG_MAX);
         }
-        options.timestamp = &readTs;
+
+        rocksdb::Slice readTimestamp(timestamp.data(), timestamp.size());
+        options.timestamp = &readTimestamp;
         return _db->Get(options, key, value);
     }
 
     RocksIterator* RocksRecoveryUnit::NewIterator(std::string prefix, bool isOplog) {
         std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
-        std::unique_ptr<rocksdb::Slice> readTs(new rocksdb::Slice());
+        std::unique_ptr<rocksdb::Slice> timestampSlice(new rocksdb::Slice());
+        std::string timestamp;
         rocksdb::ReadOptions options;
         options.iterate_upper_bound = upperBound.get();
         options.snapshot = snapshot();
+
         if (_readFromMajorityCommittedSnapshot) {
-            *readTs.get() = rocksdb::Slice(encodeTimestamp(*_snapshotManager->getCommittedSnapshot()));
+            timestamp = encodeTimestamp(*_readFromMajorityCommittedSnapshot);
         } else {
-            *readTs.get() = rocksdb::Slice(encodeTimestamp(ULLONG_MAX));
+            timestamp = encodeTimestamp(ULLONG_MAX);
         }
-        options.timestamp = readTs.get();
+       
+        options.timestamp = timestampSlice.get(); 
         auto iterator = _writeBatch.NewIteratorWithBase(_db->NewIterator(options));
         auto prefixIterator = new PrefixStrippingIterator(std::move(prefix), iterator,
                                                           isOplog ? nullptr : _compactionScheduler,
                                                           std::move(upperBound),
-                                                          std::move(readTs));
+                                                          std::move(timestamp), std::move(timestampSlice));
         return prefixIterator;
     }
 
     RocksIterator* RocksRecoveryUnit::NewIteratorNoSnapshot(rocksdb::DB* db, std::string prefix) {
         std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
-        std::unique_ptr<rocksdb::Slice> readTs(new rocksdb::Slice());
-         *readTs.get() = rocksdb::Slice(encodeTimestamp(ULLONG_MAX));
+        std::unique_ptr<rocksdb::Slice> timestampSlice(new rocksdb::Slice());
+        std::string timestamp(encodeTimestamp(ULLONG_MAX));
         rocksdb::ReadOptions options;
         options.iterate_upper_bound = upperBound.get();
-        options.timestamp = readTs.get();
+        options.timestamp = timestampSlice.get();
         auto iterator = db->NewIterator(options);
         return new PrefixStrippingIterator(std::move(prefix), iterator, nullptr,
                                            std::move(upperBound),
-                                           std::move(readTs));
+                                           std::move(timestamp), std::move(timestampSlice));
     }
 
     void RocksRecoveryUnit::incrementCounter(const rocksdb::Slice& counterKey,
