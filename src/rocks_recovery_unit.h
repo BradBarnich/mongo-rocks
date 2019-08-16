@@ -241,6 +241,8 @@ namespace mongo {
 
         rocksdb::DB* getDB() const { return _db; }
 
+        std::string getReadTimestamp();
+
     private:
         void _releaseSnapshot();
 
@@ -283,7 +285,7 @@ namespace mongo {
         // should be shared here to ensure that it is not released early
         std::shared_ptr<RocksSnapshotManager::SnapshotHolder> _snapshotHolder;
 
-        boost::optional<uint64_t> _readFromMajorityCommittedSnapshot;
+        boost::optional<Timestamp> _readFromMajorityCommittedSnapshot;
         bool _areWriteUnitOfWorksBanned = false;
 
         std::vector<rocksdb::Slice> _timestamps;

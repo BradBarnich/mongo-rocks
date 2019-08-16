@@ -319,8 +319,15 @@ namespace mongo {
             case ReadSource::kMajorityCommitted:
                 // This ReadSource depends on a previous call to obtainMajorityCommittedSnapshot() and
                 // does not require an open transaction to return a valid timestamp.
-                invariant(_readFromMajorityCommittedSnapshot);
-                return Timestamp(*_readFromMajorityCommittedSnapshot);
+                if(!_readFromMajorityCommittedSnapshot)
+                {
+                    uassert(ErrorCodes::ReadConcernMajorityNotAvailableYet,
+                        "Committed view disappeared while running operation",
+                        _snapshotManager->haveCommittedSnapshot());
+                        
+                    return _snapshotManager->getCommittedSnapshot();
+                }
+                return *_readFromMajorityCommittedSnapshot;
             case ReadSource::kProvided:
                 // The read timestamp is set by the user and does not require a transaction to be open.
                 invariant(!_readAtTimestamp.isNull());
@@ -448,13 +455,7 @@ namespace mongo {
         }
         rocksdb::ReadOptions options;
         options.snapshot = snapshot();
-        std::string timestamp;
-        if (_readFromMajorityCommittedSnapshot) {
-            timestamp = encodeTimestamp(*_readFromMajorityCommittedSnapshot);
-        } else {
-            timestamp = encodeTimestamp(ULLONG_MAX);
-        }
-
+        std::string timestamp = getReadTimestamp();
         rocksdb::Slice readTimestamp(timestamp.data(), timestamp.size());
         options.timestamp = &readTimestamp;
         return _db->Get(options, key, value);
@@ -463,17 +464,10 @@ namespace mongo {
     RocksIterator* RocksRecoveryUnit::NewIterator(std::string prefix, bool isOplog) {
         std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
         std::unique_ptr<rocksdb::Slice> timestampSlice(new rocksdb::Slice());
-        std::string timestamp;
+        std::string timestamp = getReadTimestamp();
         rocksdb::ReadOptions options;
         options.iterate_upper_bound = upperBound.get();
         options.snapshot = snapshot();
-
-        if (_readFromMajorityCommittedSnapshot) {
-            timestamp = encodeTimestamp(*_readFromMajorityCommittedSnapshot);
-        } else {
-            timestamp = encodeTimestamp(ULLONG_MAX);
-        }
-       
         options.timestamp = timestampSlice.get(); 
         auto iterator = _writeBatch.NewIteratorWithBase(_db->NewIterator(options));
         auto prefixIterator = new PrefixStrippingIterator(std::move(prefix), iterator,
@@ -640,5 +634,15 @@ namespace mongo {
 
     RecoveryUnit::ReadSource RocksRecoveryUnit::getTimestampReadSource() const {
         return _timestampReadSource;
+    }
+
+    std::string RocksRecoveryUnit::getReadTimestamp() {
+        auto timestamp = getPointInTimeReadTimestamp();
+        if(!timestamp)
+        {
+            return encodeTimestamp(ULLONG_MAX);
+        }
+
+        return encodeTimestamp(timestamp.get().asULL());
     }
 }

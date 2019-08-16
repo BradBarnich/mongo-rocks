@@ -69,16 +69,16 @@ public:
 
     bool haveCommittedSnapshot() const;
 
-    boost::optional<uint64_t> getCommittedSnapshot() const;
+    boost::optional<Timestamp> getCommittedSnapshot() const;
 
-    boost::optional<uint64_t> getLocalSnapshot() const;
+    boost::optional<Timestamp> getLocalSnapshot() const;
 
 private:
     mutable stdx::mutex _committedSnapshotMutex;  // Guards _committedSnapshot
-    boost::optional<uint64_t> _committedSnapshot;
+    boost::optional<Timestamp> _committedSnapshot;
 
     // Snapshot to use for reads at a local stable timestamp.
     mutable stdx::mutex _localSnapshotMutex;  // Guards _localSnapshot.
-    boost::optional<uint64_t> _localSnapshot;
+    boost::optional<Timestamp> _localSnapshot;
 };
 } // namespace mongo

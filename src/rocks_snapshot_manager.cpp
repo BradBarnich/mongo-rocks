@@ -39,38 +39,29 @@
 #include "mongo/util/log.h"
 
 namespace mongo {
-    void RocksSnapshotManager::setCommittedSnapshot(const Timestamp& ts) {
+    void RocksSnapshotManager::setCommittedSnapshot(const Timestamp& timestamp) {
         stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
 
-        uint64_t nameU64 = ts.asULL();
-        invariant(!_committedSnapshot || *_committedSnapshot <= nameU64);
-        _committedSnapshot = nameU64;
+        invariant(!_committedSnapshot || *_committedSnapshot <= timestamp);
+        _committedSnapshot = timestamp;
     }
 
     void RocksSnapshotManager::setLocalSnapshot(const Timestamp& timestamp) {
         stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
         if (timestamp.isNull())
             _localSnapshot = boost::none;
-        else {
-            uint64_t nameU64 = timestamp.asULL();
-            _localSnapshot = nameU64;
-        }
+        else
+            _localSnapshot = timestamp;
     }
 
-    boost::optional<uint64_t> RocksSnapshotManager::getLocalSnapshot() const {
+    boost::optional<Timestamp> RocksSnapshotManager::getLocalSnapshot() const {
         stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
         return _localSnapshot;
     }
 
     void RocksSnapshotManager::dropAllSnapshots() {
-        {
-            stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
-            _committedSnapshot = boost::none;
-        }
-        {
-            stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
-            _localSnapshot = boost::none;
-        }
+        stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
+        _committedSnapshot = boost::none;
     }
 
     bool RocksSnapshotManager::haveCommittedSnapshot() const {
@@ -78,7 +69,7 @@ namespace mongo {
         return bool(_committedSnapshot);
     }
 
-    boost::optional<uint64_t> RocksSnapshotManager::getCommittedSnapshot() const {
+    boost::optional<Timestamp> RocksSnapshotManager::getCommittedSnapshot() const {
         stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
 
         uassert(ErrorCodes::ReadConcernMajorityNotAvailableYet,
