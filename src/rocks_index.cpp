@@ -244,7 +244,7 @@ namespace mongo {
             bool seekCursor(const KeyString& query) {
                 auto * iter = iterator();
                 auto keyString = std::string(query.getBuffer(), query.getSize());
-                keyString.append(sizeof(uint64_t), '\0');
+                keyString.append(sizeof(uint64_t), '\xff');
                 const rocksdb::Slice keySlice(keyString);
                 iter->Seek(keySlice);
                 if (!_updateOnIteratorValidity()) {
@@ -497,7 +497,7 @@ namespace mongo {
             _keyString.resetToKey(_key, _ordering);
             _records.push_back(std::make_pair(loc, _keyString.getTypeBits()));
 
-            return Status::OK();
+            return StatusWith<SpecialFormatInserted>(SpecialFormatInserted::NoSpecialFormatInserted);
         }
 
         SpecialFormatInserted commit(bool mayInterrupt) {

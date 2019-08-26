@@ -601,23 +601,6 @@ namespace mongo {
         options.allow_concurrent_memtable_write = true;
         options.enable_write_thread_adaptive_yield = true;
         options.compression = rocksdb::kLZ4Compression;
-        // options.compression_per_level.resize(3);
-        // options.compression_per_level[0] = rocksdb::kNoCompression;
-        // options.compression_per_level[1] = rocksdb::kNoCompression;
-        // if (rocksGlobalOptions.compression == "snappy") {
-        //     options.compression_per_level[2] = rocksdb::kSnappyCompression;
-        // } else if (rocksGlobalOptions.compression == "zlib") {
-        //     options.compression_per_level[2] = rocksdb::kZlibCompression;
-        // } else if (rocksGlobalOptions.compression == "none") {
-        //     options.compression_per_level[2] = rocksdb::kNoCompression;
-        // } else if (rocksGlobalOptions.compression == "lz4") {
-        //     options.compression_per_level[2] = rocksdb::kLZ4Compression;
-        // } else if (rocksGlobalOptions.compression == "lz4hc") {
-        //     options.compression_per_level[2] = rocksdb::kLZ4HCCompression;
-        // } else {
-        //     log() << "Unknown compression, will use default (zstd)";
-        //     options.compression_per_level[2] = rocksdb::kZSTD;
-        // }
         options.bottommost_compression = rocksdb::kZSTD;
 
         options.statistics = _statistics;

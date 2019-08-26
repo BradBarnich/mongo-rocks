@@ -61,6 +61,7 @@ namespace {
             boost::filesystem::remove_all(_tempDir.path());
             rocksdb::DB* db;
             rocksdb::Options options;
+            options.comparator = TimestampComparator();
             options.create_if_missing = true;
             auto s = rocksdb::DB::Open(options, _tempDir.path(), &db);
             ASSERT(s.ok());
@@ -110,7 +111,7 @@ namespace {
 
     private:
         Ordering _order;
-        string _testNamespace = "mongo-rocks-sorted-data-test";
+        string _testNamespace = "test.rocks";
         unittest::TempDir _tempDir;
         std::unique_ptr<rocksdb::DB> _db;
         RocksTransactionEngine _transactionEngine;

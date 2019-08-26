@@ -59,6 +59,7 @@ namespace mongo {
             boost::filesystem::remove_all(_tempDir.path());
             rocksdb::DB* db;
             rocksdb::Options options;
+            options.comparator = TimestampComparator();
             options.create_if_missing = true;
             auto s = rocksdb::DB::Open(options, _tempDir.path(), &db);
             ASSERT(s.ok());

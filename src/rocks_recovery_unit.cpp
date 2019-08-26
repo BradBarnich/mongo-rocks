@@ -333,6 +333,7 @@ namespace mongo {
                 invariant(!_readAtTimestamp.isNull());
                 return _readAtTimestamp;
             case ReadSource::kLastApplied:
+                return _snapshotManager->getLocalSnapshot();
             case ReadSource::kNoOverlap:
             case ReadSource::kAllCommittedSnapshot:
                 MONGO_UNREACHABLE;
