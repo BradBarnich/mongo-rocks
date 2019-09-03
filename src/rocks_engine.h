@@ -150,7 +150,7 @@ namespace mongo {
 
         virtual void setJournalListener(JournalListener* jl);
 
-        virtual Timestamp getAllCommittedTimestamp() const override {
+        virtual Timestamp getAllDurableTimestamp() const override {
             return Timestamp();
         }
 

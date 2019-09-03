@@ -56,6 +56,20 @@
 #include "rocks_recovery_unit.h"
 #include "rocks_util.h"
 
+#define TRACING_ENABLED 1
+
+#if TRACING_ENABLED
+#define TRACE_CURSOR log() << "Rocks index"
+#define TRACE_INDEX log() << "Rocks index (" << (const void*)this << ") "
+#else
+#define TRACE_CURSOR \
+    if (0)           \
+    log()
+#define TRACE_INDEX \
+    if (0)          \
+    log()
+#endif
+
 namespace mongo {
 
     using std::string;
@@ -68,17 +82,23 @@ namespace mongo {
         static const int kMinimumIndexVersion = kKeyStringV0Version;
         static const int kMaximumIndexVersion = kKeyStringV1Version;
 
-        /**
-         * Strips the field names from a BSON object
-         */
-        BSONObj stripFieldNames( const BSONObj& obj ) {
-            BSONObjBuilder b;
-            BSONObjIterator i( obj );
-            while ( i.more() ) {
-                BSONElement e = i.next();
-                b.appendAs( e, "" );
+        bool hasFieldNames(const BSONObj& obj) {
+            BSONForEach(e, obj) {
+                if (e.fieldName()[0])
+                    return true;
             }
-            return b.obj();
+            return false;
+        }
+
+        BSONObj stripFieldNames( const BSONObj& query ) {
+            if (!hasFieldNames(query))
+                return query;
+
+            BSONObjBuilder bb;
+            BSONForEach(e, query) {
+                bb.appendAs(e, StringData());
+            }
+            return bb.obj();
         }
 
         const int kTempKeyMaxSize = 1024;  // Do the same as the heap implementation
@@ -118,7 +138,7 @@ namespace mongo {
                 if (_eof) {
                     return {};
                 }
-                if (!_lastMoveWasRestore) {
+                if (!_lastMoveSkippedKey) {
                     advanceCursor();
                 }
                 updatePosition();
@@ -126,6 +146,7 @@ namespace mongo {
             }
 
             void setEndPosition(const BSONObj& key, bool inclusive) override {
+                TRACE_CURSOR << "setEndPosition inclusive: " << inclusive << ' ' << key;
                 if (key.isEmpty()) {
                     // This means scan to end of index.
                     _endPosition.reset();
@@ -134,23 +155,22 @@ namespace mongo {
 
                 // NOTE: this uses the opposite rules as a normal seek because a forward scan should
                 // end after the key if inclusive and before if exclusive.
-                const auto discriminator = _forward == inclusive ? KeyString::kExclusiveAfter
-                                                                 : KeyString::kExclusiveBefore;
+                const auto discriminator = 
+                    _forward == inclusive ? KeyString::kExclusiveAfter : KeyString::kExclusiveBefore;
                 _endPosition = stdx::make_unique<KeyString>(_keyStringVersion);
                 _endPosition->resetToKey(stripFieldNames(key), _order, discriminator);
             }
 
             boost::optional<IndexKeyEntry> seek(const BSONObj& key, bool inclusive,
                                                 RequestedInfo parts) override {
+                dassert(_opCtx->lockState()->isReadLocked());
                 const BSONObj finalKey = stripFieldNames(key);
-
-                const auto discriminator = _forward == inclusive ? KeyString::kExclusiveBefore
-                    : KeyString::kExclusiveAfter;
+                const auto discriminator =
+                    _forward == inclusive ? KeyString::kExclusiveBefore : KeyString::kExclusiveAfter;
 
                 // By using a discriminator other than kInclusive, there is no need to distinguish
                 // unique vs non-unique key formats since both start with the key.
                 _query.resetToKey(finalKey, _order, discriminator);
-
                 seekCursor(_query);
                 updatePosition();
                 return curr(parts);
@@ -158,12 +178,13 @@ namespace mongo {
 
             boost::optional<IndexKeyEntry> seek(const IndexSeekPoint& seekPoint,
                                                 RequestedInfo parts) override {
+                dassert(_opCtx->lockState()->isReadLocked());
                 // make a key representing the location to which we want to advance.
                 BSONObj key = IndexEntryComparison::makeQueryObject(seekPoint, _forward);
 
                 // makeQueryObject handles the discriminator in the real exclusive cases.
-                const auto discriminator = _forward ? KeyString::kExclusiveBefore
-                                                    : KeyString::kExclusiveAfter;
+                const auto discriminator =
+                    _forward ? KeyString::kExclusiveBefore : KeyString::kExclusiveAfter;
                 _query.resetToKey(key, _order, discriminator);
                 seekCursor(_query);
                 updatePosition();
@@ -171,13 +192,21 @@ namespace mongo {
             }
 
             void save() override {
-                if (!_lastMoveWasRestore) {
-                    _savedEOF = _eof;
+                try {
+                    if (_iterator)
+                        _iterator.reset();
+                } catch (const WriteConflictException&) {
+                    // Ignore since this is only called when we are about to kill our transaction
+                    // anyway.
                 }
+
+                // Our saved position is wherever we were when we last called updatePosition().
+                // Any partially completed repositions should not effect our saved position.
             }
 
             void saveUnpositioned() override {
-                _savedEOF = true;
+                save();
+                _eof = true;
             }
 
             void restore() override {
@@ -186,10 +215,11 @@ namespace mongo {
                     _currentSequenceNumber != ru->snapshot()->GetSequenceNumber()) {
                     _iterator.reset(ru->NewIterator(_prefix));
                     _currentSequenceNumber = ru->snapshot()->GetSequenceNumber();
+                }
 
-                    if (!_savedEOF) {
-                        _lastMoveWasRestore = !seekCursor(_key);
-                    }
+                if (!_eof) {
+                    _lastMoveSkippedKey = !seekCursor(_key);
+                    TRACE_CURSOR << "restore _lastMoveSkippedKey:" << _lastMoveSkippedKey;
                 }
             }
 
@@ -213,8 +243,10 @@ namespace mongo {
                 }
 
                 BSONObj bson;
-                if (parts & kWantKey) {
+                if (TRACING_ENABLED || (parts & kWantKey)) {
                     bson =  KeyString::toBson(_key.getBuffer(), _key.getSize(), _order, _typeBits);
+
+                    TRACE_CURSOR << " returning " << bson << ' ' << _loc;
                 }
 
                 return {{std::move(bson), _loc}};
@@ -244,9 +276,11 @@ namespace mongo {
             bool seekCursor(const KeyString& query) {
                 auto * iter = iterator();
                 auto keyString = std::string(query.getBuffer(), query.getSize());
-                keyString.append(sizeof(uint64_t), '\xff');
                 const rocksdb::Slice keySlice(keyString);
-                iter->Seek(keySlice);
+                auto keyWithTimestamp = std::string(query.getBuffer(), query.getSize());
+                //keyWithTimestamp.append(sizeof(uint64_t), '\xff');
+                const rocksdb::Slice keySliceWithTimestamp(keyWithTimestamp);
+                iter->Seek(keySliceWithTimestamp);
                 if (!_updateOnIteratorValidity()) {
                     if (!_forward) {
                         // this will give lower bound behavior for backwards
@@ -256,7 +290,9 @@ namespace mongo {
                     return false;
                 }
 
-                if (iter->key() == keySlice) {
+                auto key = iter->key();
+
+                if (key == keySlice) {
                     return true;
                 }
 
@@ -274,11 +310,14 @@ namespace mongo {
             }
 
             void updatePosition() {
-                _lastMoveWasRestore = false;
-                if (_eof) {
+                _lastMoveSkippedKey = false;
+                if (_cursorAtEof) {
+                    _eof = true;
                     _loc = RecordId();
                     return;
                 }
+
+                _eof = false;
 
                 if (_iterator.get() == nullptr) {
                     // _iterator is out of position because we just did a seekExact
@@ -311,10 +350,10 @@ namespace mongo {
             // Update _eof based on _iterator->Valid() and return _iterator->Valid()
             bool _updateOnIteratorValidity() {
                 if (_iterator->Valid()) {
-                    _eof = false;
+                    _cursorAtEof = false;
                     return true;
                 } else {
-                    _eof = true;
+                    _cursorAtEof = true;
                     invariantRocksOK(_iterator->status());
                     return false;
                 }
@@ -327,15 +366,18 @@ namespace mongo {
                 return rocksdb::Slice(_iterator->value());
             }
 
-            rocksdb::DB* _db;                                       // not owned
+            rocksdb::DB* _db; // not owned
             std::string _prefix;
             std::unique_ptr<RocksIterator> _iterator;
             const bool _forward;
-            bool _lastMoveWasRestore = false;
+            
+            // Used by next to decide to return current position rather than moving. Should be reset to
+            // false by any operation that moves the cursor, other than subsequent save/restore pairs.
+            bool _lastMoveSkippedKey = false;
+
             Ordering _order;
 
             // These are for storing savePosition/restorePosition state
-            bool _savedEOF = false;
             RecordId _savedRecordId;
             rocksdb::SequenceNumber _currentSequenceNumber;
 
@@ -348,7 +390,12 @@ namespace mongo {
 
             std::unique_ptr<KeyString> _endPosition;
 
-            bool _eof = false;
+            bool _eof = true;
+
+            // This differs from _eof in that it always reflects the result of the most recent call to
+            // reposition _cursor.
+            bool _cursorAtEof = false;
+
             OperationContext* _opCtx;
 
             // stores the value associated with the latest call to seekExact()
@@ -380,7 +427,7 @@ namespace mongo {
 
             boost::optional<IndexKeyEntry> seekExact(const BSONObj& key,
                                                      RequestedInfo parts) override {
-                _eof = false;
+                _cursorAtEof = false;
                 _iterator.reset();
 
                 std::string prefixedKey(_prefix);
@@ -390,7 +437,7 @@ namespace mongo {
                     ->Get(prefixedKey, &_value);
 
                 if (status.IsNotFound()) {
-                    _eof = true;
+                    _cursorAtEof = true;
                 } else if (!status.ok()) {
                     invariantRocksOK(status);
                 }
@@ -403,15 +450,16 @@ namespace mongo {
                 // state,
                 // where no duplicates are possible. The cases where dups are allowed should hold
                 // sufficient locks to ensure that no cursor ever sees them.
+                std::string value(_valueSlice().data(), _valueSlice().size());
                 BufReader br(_valueSlice().data(), _valueSlice().size());
                 _loc = KeyString::decodeRecordId(&br);
                 _typeBits.resetFromBuffer(&br);
 
-                if (!br.atEof()) {
-                    severe() << "Unique index cursor seeing multiple records for key "
-                             << redact(curr(kWantKey)->key) << " in index " << _indexName;
-                    fassertFailed(28609);
-                }
+                // if (!br.atEof()) {
+                //     severe() << "Unique index cursor seeing multiple records for key "
+                //              << redact(curr(kWantKey)->key) << " in index " << _indexName;
+                //     fassertFailed(28609);
+                // }
             }
 
         private:
@@ -557,8 +605,11 @@ namespace mongo {
           _order(Ordering::make(_keyPattern))
     {
         uint64_t storageSize;
+        _prefix.append(sizeof(uint64_t), '\0');
         std::string nextPrefix = rocksGetNextPrefix(_prefix);
+        nextPrefix.append(sizeof(uint64_t), '\0'); 
         rocksdb::Range wholeRange(_prefix, nextPrefix);
+
         _db->GetApproximateSizes(&wholeRange, 1, &storageSize);
         _indexStorageSize.store(static_cast<long long>(storageSize), std::memory_order_relaxed);
 
@@ -710,6 +761,10 @@ namespace mongo {
 
         rocksdb::Slice valueVectorSlice(valueVector.getBuffer(), valueVector.getSize());
         ru->writeBatch()->Put(prefixedKey, valueVectorSlice);
+        
+        if (valueVector.getTypeBits().isLongEncoding())
+            return StatusWith<SpecialFormatInserted>(SpecialFormatInserted::LongTypeBitsInserted);
+
         return StatusWith<SpecialFormatInserted>(SpecialFormatInserted::NoSpecialFormatInserted);
     }
 

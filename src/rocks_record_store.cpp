@@ -529,8 +529,7 @@ namespace mongo {
             } else {
                 iter.reset(ru->NewIterator(_prefix));
             }
-            int64_t storage;
-            iter->Seek(RocksRecordStore::_makeKey(_cappedOldestKeyHint, &storage));
+            iter->Seek(RocksRecordStore::_makeKey(_cappedOldestKeyHint));
 
             RecordId newestOld;
             while ((sizeSaved < sizeOverCap || docsRemoved < docsOverCap) &&
@@ -886,8 +885,7 @@ namespace mongo {
         // that values are different (much smaller), so reading is faster. in this case, we only
         // need keys (we never touch the values), so this works nicely
         std::unique_ptr<rocksdb::Iterator> iter(_oplogKeyTracker->newIterator(ru));
-        int64_t storage;
-        iter->Seek(_makeKey(startingPosition, &storage));
+        iter->Seek(_makeKey(startingPosition));
         if (!iter->Valid()) {
             iter->SeekToLast();
             if (iter->Valid()) {
@@ -964,21 +962,22 @@ namespace mongo {
         return RecordId(_nextIdNum.fetchAndAdd(1));
     }
 
-    rocksdb::Slice RocksRecordStore::_makeKey(const RecordId& loc, int64_t* storage) {
-        *storage = endian::nativeToBig(loc.repr());
-        return rocksdb::Slice(reinterpret_cast<const char*>(storage), sizeof(*storage));
+    std::string RocksRecordStore::_makeKey(const RecordId& loc) {
+        int64_t storage = endian::nativeToBig(loc.repr());
+        auto key = std::string(reinterpret_cast<const char*>(&storage), sizeof(uint64_t));
+        key.append(sizeof(uint64_t),'\xff');
+        return key;
     }
 
     std::string RocksRecordStore::_makePrefixedKey(const std::string& prefix, const RecordId& loc) {
-        int64_t storage;
-        auto encodedLoc = _makeKey(loc, &storage);
+        auto encodedLoc = _makeKey(loc);
         std::string key(prefix);
         key.append(encodedLoc.data(), encodedLoc.size());
         return key;
     }
 
     RecordId RocksRecordStore::_makeRecordId(const rocksdb::Slice& slice) {
-        invariant(slice.size() == sizeof(int64_t));
+        invariant(slice.size() == sizeof(int64_t) + sizeof(uint64_t));
         int64_t repr = endian::bigToNative(*reinterpret_cast<const int64_t*>(slice.data()));
         RecordId a(repr);
         return RecordId(repr);
@@ -1051,8 +1050,7 @@ namespace mongo {
     // requires !_eof
     void RocksRecordStore::Cursor::positionIterator() {
         _skipNextAdvance = false;
-        int64_t locStorage;
-        auto seekTarget = RocksRecordStore::_makeKey(_lastLoc, &locStorage);
+        auto seekTarget = RocksRecordStore::_makeKey(_lastLoc);
         if (!_iterator->Valid() || _iterator->key() != seekTarget) {
             _iterator->Seek(seekTarget);
             if (!_iterator->Valid()) {
@@ -1188,6 +1186,9 @@ namespace mongo {
             invariantRocksOK(_iterator->status());
             _eof = true;
             return {};
+        }
+        if(_iterator->key().size() == 0) {
+            _iterator->Valid();
         }
         _eof = false;
         _lastLoc = _makeRecordId(_iterator->key());

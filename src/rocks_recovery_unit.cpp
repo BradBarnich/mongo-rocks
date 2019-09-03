@@ -90,7 +90,7 @@ namespace mongo {
 
             virtual bool Valid() const {
                 return _baseIterator->Valid() && _baseIterator->key().starts_with(_prefixSlice) &&
-                       _baseIterator->key().size() > _prefixSlice.size();
+                       _baseIterator->key().size() > _prefixSlice.size() + sizeof(uint64_t);
             }
 
             virtual void SeekToFirst() {
@@ -102,7 +102,7 @@ namespace mongo {
             virtual void SeekToLast() {
                 startOp();
                 // we can't have upper bound set to _nextPrefix since we need to seek to it
-                *_upperBound.get() = rocksdb::Slice("\xFF\xFF\xFF\xFF\0\0\0\0\0\0\0\0");
+                *_upperBound.get() = rocksdb::Slice("\xFF\xFF\xFF\xFF\0\0\0\0\0\0\0\0", 12);
                 _baseIterator->Seek(rocksdb::Slice(_nextPrefix.data(), _nextPrefix.size()));
                 // reset back to original value
                 *_upperBound.get() = rocksdb::Slice(_nextPrefix);
@@ -335,7 +335,7 @@ namespace mongo {
             case ReadSource::kLastApplied:
                 return _snapshotManager->getLocalSnapshot();
             case ReadSource::kNoOverlap:
-            case ReadSource::kAllCommittedSnapshot:
+            case ReadSource::kAllDurableSnapshot:
                 MONGO_UNREACHABLE;
         }
     }
@@ -388,7 +388,7 @@ namespace mongo {
         _writeBatch.Clear();
         _timestamps.clear();
         _lastTimestampSet = boost::none;
-        _db->Flush(rocksdb::FlushOptions());
+        //_db->Flush(rocksdb::FlushOptions());
     }
 
     void RocksRecoveryUnit::_abort() {
@@ -444,7 +444,8 @@ namespace mongo {
             auto keyString = std::string(key.data(), key.size());
             keyString.append(sizeof(uint64_t), '\0');
             auto keyWithTimestamp = rocksdb::Slice(keyString);
-            wb_iterator->Seek(keyWithTimestamp);
+            wb_iterator->SeekToLast();
+            wb_iterator->SeekForPrev(keyWithTimestamp);
             if (wb_iterator->Valid() && wb_iterator->Entry().key == keyWithTimestamp) {
                 const auto& entry = wb_iterator->Entry();
                 if (entry.type == rocksdb::WriteType::kDeleteRecord) {

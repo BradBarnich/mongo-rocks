@@ -34,6 +34,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <csignal>
 
 #include <rocksdb/slice.h>
 #include <rocksdb/write_batch.h>
@@ -74,12 +75,12 @@ namespace mongo {
 	
 	    const char* Name() const override { return "TimestampComparator"; }
 	
-	    void FindShortSuccessor(std::string*) const override {
-        MONGO_UNREACHABLE
+	    void FindShortSuccessor(std::string* key) const override {
+        return cmp_without_ts_->FindShortSuccessor(key);
       }
 	
-	    void FindShortestSeparator(std::string*, const rocksdb::Slice&) const override {
-        MONGO_UNREACHABLE
+	    void FindShortestSeparator(std::string* start, const rocksdb::Slice& limit) const override {
+        return cmp_without_ts_->FindShortestSeparator(start, limit);
       }
 	
 	    int Compare(const rocksdb::Slice& a, const rocksdb::Slice& b) const override {
@@ -93,6 +94,9 @@ namespace mongo {
 	    }
 	
 	    int CompareWithoutTimestamp(const rocksdb::Slice& a, const rocksdb::Slice& b) const override {
+        if(a.size() < timestamp_size() || b.size() < timestamp_size()) {
+          raise(SIGSTOP);
+        }
         assert(a.size() >= timestamp_size());
 	      assert(b.size() >= timestamp_size());
 	      rocksdb::Slice k1 = StripTimestampFromUserKey(a);

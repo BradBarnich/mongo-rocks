@@ -269,8 +269,7 @@ namespace mongo {
         RecordId _nextId();
         bool cappedAndNeedDelete(long long dataSizeDelta, long long numRecordsDelta) const;
 
-        // The use of this function requires that the passed in storage outlives the returned Slice
-        static rocksdb::Slice _makeKey(const RecordId& loc, int64_t* storage);
+        static std::string _makeKey(const RecordId& loc);
         static std::string _makePrefixedKey(const std::string& prefix, const RecordId& loc);
 
         void _changeNumRecords(OperationContext* opCtx, int64_t amount);
