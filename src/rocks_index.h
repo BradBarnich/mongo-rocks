@@ -65,7 +65,8 @@ namespace mongo {
         virtual bool appendCustomStats(OperationContext* opCtx, BSONObjBuilder* output,
                                        double scale) const {
             // nothing to say here, really
-            return false;
+            output->append("ident", _ident);
+            return true;
         }
 
         virtual bool isEmpty(OperationContext* opCtx);

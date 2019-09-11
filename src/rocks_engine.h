@@ -151,6 +151,10 @@ namespace mongo {
         virtual void setJournalListener(JournalListener* jl);
 
         virtual Timestamp getAllDurableTimestamp() const override {
+            if(_snapshotManager.haveCommittedSnapshot())
+            {
+                return *_snapshotManager.getCommittedSnapshot();
+            }
             return Timestamp();
         }
 

@@ -76,11 +76,9 @@ namespace mongo {
 	    const char* Name() const override { return "TimestampComparator"; }
 	
 	    void FindShortSuccessor(std::string* key) const override {
-        return cmp_without_ts_->FindShortSuccessor(key);
       }
 	
 	    void FindShortestSeparator(std::string* start, const rocksdb::Slice& limit) const override {
-        return cmp_without_ts_->FindShortestSeparator(start, limit);
       }
 	
 	    int Compare(const rocksdb::Slice& a, const rocksdb::Slice& b) const override {
@@ -194,7 +192,17 @@ namespace mongo {
 
         // local api
 
-        rocksdb::WriteBatchWithIndex* writeBatch();
+        void Put(const rocksdb::Slice& key, const rocksdb::Slice& value);
+
+        void Put(const rocksdb::Slice& key, const rocksdb::Slice& value, const Timestamp timestamp);
+
+        void Delete(const rocksdb::Slice& key);
+
+        void DeleteRange(const rocksdb::Slice& begin_key, const rocksdb::Slice& end_key);
+
+        void SingleDelete(const rocksdb::Slice& key);
+
+        void TruncatePrefix(std::string prefix);
 
         const rocksdb::Snapshot* getPreparedSnapshot();
         void dbReleaseSnapshot(const rocksdb::Snapshot* snapshot);
@@ -219,7 +227,7 @@ namespace mongo {
 
         void resetDeltaCounters();
 
-        void setOplogReadTill(const RecordId& loc);
+        void setOplogReadTill(const RecordId& record);
         RecordId getOplogReadTill() const { return _oplogReadTill; }
 
         RocksRecoveryUnit* newRocksRecoveryUnit() {
@@ -292,7 +300,7 @@ namespace mongo {
         boost::optional<Timestamp> _readFromMajorityCommittedSnapshot;
         bool _areWriteUnitOfWorksBanned = false;
 
-        std::vector<rocksdb::Slice> _timestamps;
+        std::vector<std::string> _timestamps;
 
         Timestamp _commitTimestamp;
         Timestamp _durableTimestamp;

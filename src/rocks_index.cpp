@@ -56,7 +56,7 @@
 #include "rocks_recovery_unit.h"
 #include "rocks_util.h"
 
-#define TRACING_ENABLED 1
+#define TRACING_ENABLED 0
 
 #if TRACING_ENABLED
 #define TRACE_CURSOR log() << "Rocks index"
@@ -576,7 +576,7 @@ namespace mongo {
             rocksdb::Slice valueSlice(value.getBuffer(), value.getSize());
 
             auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(_opCtx);
-            ru->writeBatch()->Put(prefixedKey, valueSlice);
+            ru->Put(prefixedKey, valueSlice);
 
             _records.clear();
         }
@@ -605,10 +605,11 @@ namespace mongo {
           _order(Ordering::make(_keyPattern))
     {
         uint64_t storageSize;
-        _prefix.append(sizeof(uint64_t), '\0');
-        std::string nextPrefix = rocksGetNextPrefix(_prefix);
-        nextPrefix.append(sizeof(uint64_t), '\0'); 
-        rocksdb::Range wholeRange(_prefix, nextPrefix);
+        std::string beginKey(_prefix);
+        beginKey.append(sizeof(uint64_t), '\xff');
+        std::string endKey = rocksGetNextPrefix(_prefix);
+        endKey.append(sizeof(uint64_t), '\xff'); 
+        rocksdb::Range wholeRange(beginKey, endKey);
 
         _db->GetApproximateSizes(&wholeRange, 1, &storageSize);
         _indexStorageSize.store(static_cast<long long>(storageSize), std::memory_order_relaxed);
@@ -720,7 +721,7 @@ namespace mongo {
                 value.appendTypeBits(encodedKey.getTypeBits());
             }
             rocksdb::Slice valueSlice(value.getBuffer(), value.getSize());
-            ru->writeBatch()->Put(prefixedKey, valueSlice);
+            ru->Put(prefixedKey, valueSlice);
             return StatusWith<SpecialFormatInserted>(SpecialFormatInserted::NoSpecialFormatInserted);
         }
 
@@ -760,7 +761,7 @@ namespace mongo {
         }
 
         rocksdb::Slice valueVectorSlice(valueVector.getBuffer(), valueVector.getSize());
-        ru->writeBatch()->Put(prefixedKey, valueVectorSlice);
+        ru->Put(prefixedKey, valueVectorSlice);
         
         if (valueVector.getTypeBits().isLongEncoding())
             return StatusWith<SpecialFormatInserted>(SpecialFormatInserted::LongTypeBitsInserted);
@@ -812,7 +813,7 @@ namespace mongo {
             }
             _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                         std::memory_order_relaxed);
-            ru->writeBatch()->Delete(prefixedKey);
+            ru->Delete(prefixedKey);
             return;
         }
 
@@ -838,7 +839,7 @@ namespace mongo {
                     // Remove the whole entry.
                     _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                                 std::memory_order_relaxed);
-                    ru->writeBatch()->Delete(prefixedKey);
+                    ru->Delete(prefixedKey);
                     return;
                 }
 
@@ -867,7 +868,7 @@ namespace mongo {
         }
 
         rocksdb::Slice newValueSlice(newValue.getBuffer(), newValue.getSize());
-        ru->writeBatch()->Put(prefixedKey, newValueSlice);
+        ru->Put(prefixedKey, newValueSlice);
         _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
     }
@@ -947,7 +948,7 @@ namespace mongo {
         _indexStorageSize.fetch_add(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
 
-        ru->writeBatch()->Put(prefixedKey, value);
+        ru->Put(prefixedKey, value);
 
         return StatusWith<SpecialFormatInserted>(SpecialFormatInserted::NoSpecialFormatInserted);
     }
@@ -979,9 +980,9 @@ namespace mongo {
         _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
         if (useSingleDelete) {
-            ru->writeBatch()->SingleDelete(prefixedKey);
+            ru->SingleDelete(prefixedKey);
         } else {
-            ru->writeBatch()->Delete(prefixedKey);
+            ru->Delete(prefixedKey);
         }
     }
 
