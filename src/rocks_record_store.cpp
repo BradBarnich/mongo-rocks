@@ -1009,6 +1009,11 @@ namespace mongo {
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
        
 
+        if(_isOplog) {
+            auto ts = _cappedVisibilityManager->oplogStartHack();
+            uassertStatusOK(ru->setTimestamp(Timestamp(ts.repr())));
+        }
+        
         // Compute the number and associated sizes of the records to delete.
         {
             stdx::lock_guard<stdx::mutex> cappedCallbackLock(_cappedCallbackMutex);
@@ -1030,18 +1035,9 @@ namespace mongo {
                 }
             } while ((record = cursor->next()));
         }
-
         
         std::string begin_key(_makePrefixedKey(_prefix, firstRemovedId));
         auto end_key = rocksGetNextPrefix(_prefix);
-
-        if(_isOplog) {
-            auto ts = _cappedVisibilityManager->oplogStartHack();
-            uassertStatusOK(ru->setTimestamp(Timestamp(ts.repr())));
-            //log() << "delete range: " << firstRemovedId << ", ts:" << ts;
-        } else {
-            //log() << "delete range: " << firstRemovedId;
-        }
 
         ru->DeleteRange(rocksdb::Slice(begin_key), rocksdb::Slice(end_key));
         

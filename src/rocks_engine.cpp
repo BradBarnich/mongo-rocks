@@ -581,15 +581,16 @@ namespace mongo {
         options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
         options.write_buffer_size = 64 * 1024 * 1024;  // 64MB
-        options.level0_slowdown_writes_trigger = 8;
+        // options.level0_slowdown_writes_trigger = 8;
         options.max_write_buffer_number = 4;
+        options.max_background_jobs = 8;
         options.max_background_compactions = 8;
-        options.max_background_flushes = 2;
+        // options.max_background_flushes = 2;
         options.target_file_size_base = 64 * 1024 * 1024; // 64MB
-        options.soft_rate_limit = 2.5;
-        options.hard_rate_limit = 3;
+        // options.soft_rate_limit = 2.5;
+        // options.hard_rate_limit = 3;
         options.level_compaction_dynamic_level_bytes = true;
-        options.max_bytes_for_level_base = 512 * 1024 * 1024;  // 512 MB
+        options.max_bytes_for_level_base = 1024 * 1024 * 1024;  // 512 MB
         // This means there is no limit on open files. Make sure to always set ulimit so that it can
         // keep all RocksDB files opened.
         options.max_open_files = -1;
@@ -597,11 +598,19 @@ namespace mongo {
         options.compaction_filter_factory.reset(
             _compactionScheduler->createCompactionFilterFactory());
         options.enable_thread_tracking = true;
+        options.max_subcompactions = 4;
         // Enable concurrent memtable
         options.allow_concurrent_memtable_write = true;
         options.enable_write_thread_adaptive_yield = true;
-        options.compression = rocksdb::kLZ4Compression;
+        // options.compression = rocksdb::kSnappyCompression;
+        options.env->SetBackgroundThreads(4, rocksdb::Env::LOW);
+        options.env->SetBackgroundThreads(4, rocksdb::Env::HIGH);
+        options.compression_per_level.resize(3);
+        options.compression_per_level[0] = rocksdb::kLZ4Compression;
+        options.compression_per_level[1] = rocksdb::kLZ4Compression;
+        options.compression_per_level[2] = rocksdb::kLZ4Compression;
         options.bottommost_compression = rocksdb::kZSTD;
+        options.compaction_readahead_size = 1 * 1024 * 1024; // 1MB
 
         options.statistics = _statistics;
 
