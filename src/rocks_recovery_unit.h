@@ -28,6 +28,7 @@
 
 #pragma once
 
+#include "mongo/util/debugger.h"
 #include <atomic>
 #include <map>
 #include <stack>
@@ -93,7 +94,19 @@ namespace mongo {
 	
 	    int CompareWithoutTimestamp(const rocksdb::Slice& a, const rocksdb::Slice& b) const override {
         if(a.size() < timestamp_size() || b.size() < timestamp_size()) {
-          raise(SIGSTOP);
+          breakpoint();
+        }
+        if(a.size() < timestamp_size() && b.size() < timestamp_size() )
+        {
+          return cmp_without_ts_->Compare(a, b);
+        } 
+        if(a.size() < timestamp_size()) {
+           rocksdb::Slice k2 = StripTimestampFromUserKey(b);
+	        return cmp_without_ts_->Compare(a, k2);
+        }
+        if(b.size() < timestamp_size()) {
+          rocksdb::Slice k1 = StripTimestampFromUserKey(a);
+	        return cmp_without_ts_->Compare(k1, b);
         }
         assert(a.size() >= timestamp_size());
 	      assert(b.size() >= timestamp_size());

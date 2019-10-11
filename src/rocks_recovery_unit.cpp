@@ -80,11 +80,11 @@ namespace mongo {
                   _upperBound(std::move(upperBound)),
                   _timestamp(std::move(timestamp)),
                   _timestampSlice(std::move(timestampSlice)) {
-                
+
                 _prefixEpsilon.append(1, '\0');
                 _prefixEpsilon.append(sizeof(uint64_t), '\xff');
                 _prefixSliceEpsilon = rocksdb::Slice(_prefixEpsilon);
-                _nextPrefix.append(sizeof(uint64_t), '\xff'); 
+                _nextPrefix.append(sizeof(uint64_t), '\xff');
                 *_upperBound.get() = rocksdb::Slice(_nextPrefix);
                 *_timestampSlice.get() = rocksdb::Slice(_timestamp);
             }
@@ -262,12 +262,12 @@ namespace mongo {
     void RocksRecoveryUnit::commitUnitOfWork() {
         _commit();
 
-        if(_lastTimestampSet)
-        {
-            log() << "commit: " << _lastTimestampSet;
-        } else {
-           log() << "no commit timestamp";
-        }
+        // if(_lastTimestampSet)
+        // {
+        //     log() << "commit: " << _lastTimestampSet;
+        // } else {
+        //    log() << "no commit timestamp";
+        // }
 
         try {
             for (Changes::const_iterator it = _changes.begin(), end = _changes.end(); it != end;
@@ -279,7 +279,7 @@ namespace mongo {
         catch (...) {
             std::terminate();
         }
-        
+
         _lastTimestampSet = boost::none;
         _releaseSnapshot();
     }
@@ -302,25 +302,25 @@ namespace mongo {
     }
 
     void RocksRecoveryUnit::Put(const rocksdb::Slice& key, const rocksdb::Slice& value) {
-        //log() << "put: " << key.ToString(true) << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
+        log() << "put: " << key.ToString(true) << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
         invariantRocksOK(_writeBatch.Put(key, value));
         _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
     }
 
     void RocksRecoveryUnit::Put(const rocksdb::Slice& key, const rocksdb::Slice& value, const Timestamp timestamp) {
-        //log() << "put: " << key.ToString(true) << ", timestamp: " << timestamp;
+        log() << "put: " << key.ToString(true) << ", timestamp: " << timestamp;
         invariantRocksOK(_writeBatch.Put(key, value));
         _timestamps.push_back(encodeTimestamp(timestamp.asULL()));
     }
 
     void RocksRecoveryUnit::Delete(const rocksdb::Slice& key) {
-        //log() << "delete: " << key.ToString(true) << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
+        log() << "delete: " << key.ToString(true) << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
         invariantRocksOK(_writeBatch.Delete(key));
         _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
     }
 
     void RocksRecoveryUnit::DeleteRange(const rocksdb::Slice& begin_key, const rocksdb::Slice& end_key) {
-        //log() << "delete range: " << begin_key.ToString(true) << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
+        log() << "delete range: " << begin_key.ToString(true) << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
         invariantRocksOK(_writeBatch.DeleteRange(begin_key, end_key));
         _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
     }
@@ -384,7 +384,7 @@ namespace mongo {
                     uassert(ErrorCodes::ReadConcernMajorityNotAvailableYet,
                         "Committed view disappeared while running operation",
                         _snapshotManager->haveCommittedSnapshot());
-                        
+
                     return _snapshotManager->getCommittedSnapshot();
                 }
                 return *_readFromMajorityCommittedSnapshot;
@@ -426,10 +426,16 @@ namespace mongo {
 
     void RocksRecoveryUnit::_commit() {
         rocksdb::WriteBatch* wb = _writeBatch.GetWriteBatch();
-        
-        std::vector<rocksdb::Slice> timestampSlices;;
+
+        std::vector<rocksdb::Slice> timestampSlices;
+
+        auto zeroTs = encodeTimestamp(0ULL);
         for (const auto& ts : _timestamps) {
-            timestampSlices.emplace_back(ts);
+            if (_lastTimestampSet.has_value() && ts.compare(zeroTs) == 0) {
+                timestampSlices.emplace_back(encodeTimestamp(_lastTimestampSet.get().asULL()));
+            } else {
+                timestampSlices.emplace_back(ts);
+            }
         }
 
         wb->AssignTimestamps(timestampSlices);
@@ -452,8 +458,8 @@ namespace mongo {
         _deltaCounters.clear();
         _writeBatch.Clear();
         _timestamps.clear();
-        
-        //_db->Flush(rocksdb::FlushOptions());
+
+        // _db->Flush(rocksdb::FlushOptions());
     }
 
     void RocksRecoveryUnit::_abort() {
@@ -522,11 +528,11 @@ namespace mongo {
         }
         rocksdb::ReadOptions options;
         options.snapshot = snapshot();
-        //log() << "Get at snapshot" << options.snapshot->GetSequenceNumber();
+        //log() << "Get at snapshot " << options.snapshot->GetSequenceNumber();
         std::string timestamp = getReadTimestamp();
         rocksdb::Slice readTimestamp(timestamp);
         options.timestamp = &readTimestamp;
-        
+
         return _db->Get(options, key, value);
     }
 
@@ -537,7 +543,8 @@ namespace mongo {
         rocksdb::ReadOptions options;
         options.iterate_upper_bound = upperBound.get();
         options.snapshot = snapshot();
-        options.timestamp = timestampSlice.get(); 
+        //log() << "NewIterator at snapshot " << options.snapshot->GetSequenceNumber() << " and timestamp " << timestamp;
+        options.timestamp = timestampSlice.get();
         auto iterator = _writeBatch.NewIteratorWithBase(_db->NewIterator(options));
         auto prefixIterator = new PrefixStrippingIterator(std::move(prefix), iterator,
                                                           isOplog ? nullptr : _compactionScheduler,
