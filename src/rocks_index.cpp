@@ -506,7 +506,8 @@ public:
             // This check is only to avoid returning the same key again after a restore. Keys
             // shorter than _key cannot have "prefix key" same as _key. Therefore we care only about
             // the keys with size greater than or equal to that of the _key.
-            if (_iterator->key().size() >= keySize && std::memcmp(_key.getBuffer(), _iterator->key().data(), keySize) == 0) {
+            if (_iterator->key().size() >= keySize &&
+                std::memcmp(_key.getBuffer(), _iterator->key().data(), keySize) == 0) {
                 _lastMoveSkippedKey = false;
                 TRACE_CURSOR << "restore _lastMoveSkippedKey changed to false.";
             }
