@@ -136,10 +136,11 @@ namespace mongo {
             // * Version 2 reserves two prefixes for oplog. one prefix keeps the oplog
             // documents and another only keeps keys. That way, we can cleanup the oplog without
             // reading full documents
-            // * Version 3 (current) understands the Decimal128 index format. It also understands
+            // * Version 3 understands the Decimal128 index format. It also understands
             // the version 2, so it's backwards compatible, but not forward compatible
-            const int kRocksFormatVersion = 3;
-            const int kMinSupportedRocksFormatVersion = 2;
+            // * Version 4 TODO, but it breaks stuff
+            const int kRocksFormatVersion = 4;
+            const int kMinSupportedRocksFormatVersion = 4;
             const std::string kRocksFormatVersionString = "rocksFormatVersion";
             int mutable formatVersion = -1;
         };

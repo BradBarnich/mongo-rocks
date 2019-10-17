@@ -27,7 +27,6 @@
  */
 
 
-
 #include <atomic>
 #include <string>
 
@@ -38,114 +37,231 @@
 #include "mongo/db/storage/key_string.h"
 #include "mongo/db/storage/sorted_data_interface.h"
 
+#include "rocks_recovery_unit.h"
+
 #pragma once
 
 namespace rocksdb {
-    class DB;
+class DB;
 }
 
 namespace mongo {
 
-    class RocksRecoveryUnit;
+class RocksRecoveryUnit;
 
-    class RocksIndexBase : public SortedDataInterface {
-        RocksIndexBase(const RocksIndexBase&) = delete;
-        RocksIndexBase& operator=(const RocksIndexBase&) = delete;
+class RocksIndexBase : public SortedDataInterface {
+    RocksIndexBase(const RocksIndexBase&) = delete;
+    RocksIndexBase& operator=(const RocksIndexBase&) = delete;
 
-    public:
-        RocksIndexBase(rocksdb::DB* db, std::string prefix, std::string ident, const IndexDescriptor* desc,
+public:
+    RocksIndexBase(rocksdb::DB* db,
+                   std::string prefix,
+                   std::string ident,
+                   const IndexDescriptor* desc,
+                   const BSONObj& config);
+
+    virtual StatusWith<SpecialFormatInserted> insert(OperationContext* opCtx,
+                                                     const BSONObj& key,
+                                                     const RecordId& id,
+                                                     bool dupsAllowed);
+
+    virtual void unindex(OperationContext* opCtx,
+                         const BSONObj& key,
+                         const RecordId& id,
+                         bool dupsAllowed);
+
+    virtual void fullValidate(OperationContext* opCtx,
+                              long long* numKeysOut,
+                              ValidateResults* fullResults) const;
+
+    virtual bool appendCustomStats(OperationContext* opCtx,
+                                   BSONObjBuilder* output,
+                                   double scale) const {
+        // nothing to say here, really
+        output->append("ident", _ident);
+        return true;
+    }
+
+    virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key);
+
+    virtual bool isEmpty(OperationContext* opCtx);
+
+    virtual long long getSpaceUsedBytes(OperationContext* opCtx) const;
+
+    virtual Status initAsEmpty(OperationContext* opCtx);
+
+    virtual bool isDup(OperationContext* opCtx, const BSONObj& key);
+
+    static void generateConfig(BSONObjBuilder* configBuilder,
+                               int formatVersion,
+                               const IndexDescriptor* desc);
+
+    Ordering ordering() const {
+        return _ordering;
+    }
+
+    KeyString::Version keyStringVersion() const {
+        return _keyStringVersion;
+    }
+
+    const NamespaceString& collectionNamespace() const {
+        return _collectionNamespace;
+    }
+
+    std::string indexName() const {
+        return _indexName;
+    }
+
+    const BSONObj& keyPattern() const {
+        return _keyPattern;
+    }
+
+    bool isIdIndex() const {
+        return _isIdIndex;
+    }
+
+    rocksdb::DB* db() const {
+        return _db;
+    }
+
+    virtual bool unique() const = 0;
+    virtual bool isTimestampSafeUniqueIdx() const = 0;
+
+protected:
+    static std::string _makePrefixedKey(const std::string& prefix, const KeyString& encodedKey);
+
+    virtual StatusWith<SpecialFormatInserted> _insert(OperationContext* opCtx,
+                                                      const BSONObj& key,
+                                                      const RecordId& id,
+                                                      bool dupsAllowed) = 0;
+
+    virtual void _unindex(OperationContext* opCtx,
+                          const BSONObj& key,
+                          const RecordId& id,
+                          bool dupsAllowed) = 0;
+
+    rocksdb::DB* _db;  // not owned
+
+    std::string _ident;
+
+    const Ordering _ordering;
+    // The keystring and data format version are effectively const after the WiredTigerIndex
+    // instance is constructed.
+    KeyString::Version _keyStringVersion;
+    int _dataFormatVersion;
+
+    const NamespaceString _collectionNamespace;
+    const std::string _indexName;
+    const BSONObj _keyPattern;
+    // Each key in the index is prefixed with _prefix
+    std::string _prefix;
+    bool _isIdIndex;
+
+
+    // very approximate index storage size
+    std::atomic<long long> _indexStorageSize;
+
+    class StandardBulkBuilder;
+    class UniqueBulkBuilder;
+    friend class UniqueBulkBuilder;
+};
+
+class RocksUniqueIndex : public RocksIndexBase {
+public:
+    RocksUniqueIndex(rocksdb::DB* db,
+                     std::string prefix,
+                     std::string ident,
+                     const IndexDescriptor* desc,
+                     const BSONObj& config);
+
+    std::unique_ptr<SortedDataInterface::Cursor> newCursor(OperationContext* opCtx,
+                                                           bool forward) const override;
+
+    SortedDataBuilderInterface* getBulkBuilder(OperationContext* opCtx, bool dupsAllowed) override;
+
+    bool unique() const override {
+        return true;
+    }
+
+    bool isTimestampSafeUniqueIdx() const override;
+
+    bool isDup(OperationContext* opCtx, const BSONObj& key) override;
+
+    StatusWith<SpecialFormatInserted> _insert(OperationContext* opCtx,
+                                                     const BSONObj& key,
+                                                     const RecordId& id,
+                                                     bool dupsAllowed) override;
+    
+    StatusWith<SpecialFormatInserted> _insertTimestampUnsafe(OperationContext* opCtx,
+                                                             const BSONObj& key,
+                                                             const RecordId& id,
+                                                             bool dupsAllowed);
+
+    StatusWith<SpecialFormatInserted> _insertTimestampSafe(OperationContext* opCtx,
+                                                           const BSONObj& key,
+                                                           const RecordId& id,
+                                                           bool dupsAllowed);
+
+    void _unindex(OperationContext* opCtx,
+                         const BSONObj& key,
+                         const RecordId& id,
+                         bool dupsAllowed) override;
+
+    void _unindexTimestampUnsafe(OperationContext* opCtx,
+                                 const BSONObj& key,
+                                 const RecordId& id,
+                                 bool dupsAllowed);
+
+    void _unindexTimestampSafe(OperationContext* opCtx,
+                               const BSONObj& key,
+                               const RecordId& id,
+                               bool dupsAllowed);
+
+private:
+    /**
+     * If this returns true, the iterator will be positioned on the first matching the input 'key'.
+     */
+    bool _keyExists(OperationContext* opCtx, RocksIterator* it, const KeyString& key);
+
+    const bool _partial;
+};
+
+class RocksStandardIndex : public RocksIndexBase {
+public:
+    RocksStandardIndex(rocksdb::DB* db,
+                       std::string prefix,
+                       std::string ident,
+                       const IndexDescriptor* desc,
                        const BSONObj& config);
 
-        virtual SortedDataBuilderInterface* getBulkBuilder(OperationContext* opCtx,
-                                                           bool dupsAllowed) = 0;
+    std::unique_ptr<SortedDataInterface::Cursor> newCursor(OperationContext* opCtx,
+                                                           bool forward) const override;
 
-        virtual void fullValidate(OperationContext* opCtx, long long* numKeysOut,
-                                  ValidateResults* fullResults) const;
+    SortedDataBuilderInterface* getBulkBuilder(OperationContext* opCtx, bool dupsAllowed) override;
 
-        virtual bool appendCustomStats(OperationContext* opCtx, BSONObjBuilder* output,
-                                       double scale) const {
-            // nothing to say here, really
-            output->append("ident", _ident);
-            return true;
-        }
+    bool unique() const override {
+        return false;
+    }
 
-        virtual bool isEmpty(OperationContext* opCtx);
+    bool isTimestampSafeUniqueIdx() const override {
+        return false;
+    }
 
-        virtual Status initAsEmpty(OperationContext* opCtx);
+    StatusWith<SpecialFormatInserted> _insert(OperationContext* opCtx,
+                                                     const BSONObj& key,
+                                                     const RecordId& id,
+                                                     bool dupsAllowed);
+    void _unindex(OperationContext* opCtx,
+                         const BSONObj& key,
+                         const RecordId& id,
+                         bool dupsAllowed);
 
-        virtual long long getSpaceUsedBytes( OperationContext* opCtx ) const;
+    void enableSingleDelete() {
+        useSingleDelete = true;
+    }
 
-        static void generateConfig(BSONObjBuilder* configBuilder, int formatVersion,
-                                   IndexDescriptor::IndexVersion descVersion);
+private:
+    bool useSingleDelete;
+};
 
-    protected:
-        static std::string _makePrefixedKey(const std::string& prefix, const KeyString& encodedKey);
-
-        rocksdb::DB* _db; // not owned
-
-        // Each key in the index is prefixed with _prefix
-        std::string _prefix;
-        std::string _ident;
-        const BSONObj _keyPattern;
-
-        // very approximate index storage size
-        std::atomic<long long> _indexStorageSize;
-
-        // used to construct RocksCursors
-        const Ordering _order;
-        KeyString::Version _keyStringVersion;
-
-        class StandardBulkBuilder;
-        class UniqueBulkBuilder;
-        friend class UniqueBulkBuilder;
-    };
-
-    class RocksUniqueIndex : public RocksIndexBase {
-    public:
-        RocksUniqueIndex(rocksdb::DB* db, std::string prefix, std::string ident,
-                         const IndexDescriptor* desc, const BSONObj& config);
-
-        virtual StatusWith<SpecialFormatInserted> insert(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
-                              bool dupsAllowed);
-        virtual void unindex(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
-                             bool dupsAllowed);
-        virtual std::unique_ptr<SortedDataInterface::Cursor> newCursor(OperationContext* opCtx,
-                                                                       bool forward) const;
-
-        virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key);
-
-        virtual SortedDataBuilderInterface* getBulkBuilder(OperationContext* opCtx,
-                                                           bool dupsAllowed) override;
-    private:
-        NamespaceString _collectionNamespace;
-        std::string _indexName;
-        const bool _partial;
-    };
-
-    class RocksStandardIndex : public RocksIndexBase {
-    public:
-        RocksStandardIndex(rocksdb::DB* db, std::string prefix, std::string ident,
-                           const IndexDescriptor* desc, const BSONObj& config);
-
-        virtual StatusWith<SpecialFormatInserted> insert(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
-                              bool dupsAllowed);
-        virtual void unindex(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
-                             bool dupsAllowed);
-        virtual std::unique_ptr<SortedDataInterface::Cursor> newCursor(OperationContext* opCtx,
-                                                                       bool forward) const;
-        virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key) {
-            // dupKeyCheck shouldn't be called for non-unique indexes
-            invariant(false);
-            return Status::OK();
-        }
-
-        virtual SortedDataBuilderInterface* getBulkBuilder(OperationContext* opCtx,
-                                                           bool dupsAllowed) override;
-
-        void enableSingleDelete() { useSingleDelete = true; }
-
-    private:
-        bool useSingleDelete;
-    };
-
-} // namespace mongo
+}  // namespace mongo

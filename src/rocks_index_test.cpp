@@ -72,7 +72,6 @@ namespace {
 
         std::unique_ptr<SortedDataInterface> newSortedDataInterface(bool unique, bool partial) {
             BSONObjBuilder configBuilder;
-            RocksIndexBase::generateConfig(&configBuilder, 3, IndexDescriptor::IndexVersion::kV2);
 
             auto collection = std::make_unique<CollectionMock>(NamespaceString(_testNamespace));
 
@@ -93,6 +92,8 @@ namespace {
             }
 
             IndexDescriptor desc(collection.get(), "", spec);
+
+            RocksIndexBase::generateConfig(&configBuilder, 4, &desc);
 
             if (unique) {
                 return stdx::make_unique<RocksUniqueIndex>(_db.get(), "prefix", "ident", &desc,

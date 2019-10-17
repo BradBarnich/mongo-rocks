@@ -302,25 +302,25 @@ namespace mongo {
     }
 
     void RocksRecoveryUnit::Put(const rocksdb::Slice& key, const rocksdb::Slice& value) {
-        log() << "put: " << key.ToString(true) << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
+        // log() << "put: " << key.ToString(true) << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
         invariantRocksOK(_writeBatch.Put(key, value));
         _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
     }
 
     void RocksRecoveryUnit::Put(const rocksdb::Slice& key, const rocksdb::Slice& value, const Timestamp timestamp) {
-        log() << "put: " << key.ToString(true) << ", timestamp: " << timestamp;
+        // log() << "put: " << key.ToString(true) << ", timestamp: " << timestamp;
         invariantRocksOK(_writeBatch.Put(key, value));
         _timestamps.push_back(encodeTimestamp(timestamp.asULL()));
     }
 
     void RocksRecoveryUnit::Delete(const rocksdb::Slice& key) {
-        log() << "delete: " << key.ToString(true) << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
+        // log() << "delete: " << key.ToString(true) << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
         invariantRocksOK(_writeBatch.Delete(key));
         _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
     }
 
     void RocksRecoveryUnit::DeleteRange(const rocksdb::Slice& begin_key, const rocksdb::Slice& end_key) {
-        log() << "delete range: " << begin_key.ToString(true) << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
+        // log() << "delete range: " << begin_key.ToString(true) << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
         invariantRocksOK(_writeBatch.DeleteRange(begin_key, end_key));
         _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
     }
@@ -338,7 +338,7 @@ namespace mongo {
         //endKey.append(sizeof(uint64_t), '\xff');
 
         rocksdb::Range prefixRange(beginKey, endKey);
-        log() << "delete range: " << prefixRange.start.ToString(true) << " - " << prefixRange.limit.ToString(true);
+        // log() << "delete range: " << prefixRange.start.ToString(true) << " - " << prefixRange.limit.ToString(true);
 
         invariantRocksOK(_writeBatch.DeleteRange(prefixRange.start, prefixRange.limit));
         _timestamps.push_back(encodeTimestamp(UINT64_MAX));
