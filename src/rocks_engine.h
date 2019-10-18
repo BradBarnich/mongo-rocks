@@ -75,73 +75,73 @@ class RocksEngine final : public KVEngine {
 
 public:
     RocksEngine(const std::string& path, bool durable, int formatVersion, bool readOnly);
-    virtual ~RocksEngine();
+    ~RocksEngine();
 
     static void appendGlobalStats(BSONObjBuilder& b);
 
-    virtual RecoveryUnit* newRecoveryUnit() override;
+    RecoveryUnit* newRecoveryUnit() override;
 
-    virtual Status createRecordStore(OperationContext* opCtx,
-                                     StringData ns,
+    Status createRecordStore(OperationContext* opCtx,
+                             StringData ns,
+                             StringData ident,
+                             const CollectionOptions& options) override;
+
+    std::unique_ptr<RecordStore> makeTemporaryRecordStore(OperationContext* opCtx,
+                                                          StringData ident) override;
+
+    std::unique_ptr<RecordStore> getRecordStore(OperationContext* opCtx,
+                                                StringData ns,
+                                                StringData ident,
+                                                const CollectionOptions& options) override;
+
+    Status createSortedDataInterface(OperationContext* opCtx,
+                                     const CollectionOptions& collOptions,
                                      StringData ident,
-                                     const CollectionOptions& options) override;
+                                     const IndexDescriptor* desc) override;
 
-    virtual std::unique_ptr<RecordStore> makeTemporaryRecordStore(OperationContext* opCtx,
-                                                                  StringData ident) override;
+    SortedDataInterface* getSortedDataInterface(OperationContext* opCtx,
+                                                StringData ident,
+                                                const IndexDescriptor* desc) override;
 
-    virtual std::unique_ptr<RecordStore> getRecordStore(OperationContext* opCtx,
-                                                        StringData ns,
-                                                        StringData ident,
-                                                        const CollectionOptions& options) override;
+    Status dropIdent(OperationContext* opCtx, StringData ident) override;
 
-    virtual Status createSortedDataInterface(OperationContext* opCtx,
-                                             const CollectionOptions& collOptions,
-                                             StringData ident,
-                                             const IndexDescriptor* desc) override;
+    bool hasIdent(OperationContext* opCtx, StringData ident) const override;
 
-    virtual SortedDataInterface* getSortedDataInterface(OperationContext* opCtx,
-                                                        StringData ident,
-                                                        const IndexDescriptor* desc) override;
+    std::vector<std::string> getAllIdents(OperationContext* opCtx) const override;
 
-    virtual Status dropIdent(OperationContext* opCtx, StringData ident) override;
-
-    virtual bool hasIdent(OperationContext* opCtx, StringData ident) const override;
-
-    virtual std::vector<std::string> getAllIdents(OperationContext* opCtx) const override;
-
-    virtual bool supportsDocLocking() const override {
+    bool supportsDocLocking() const override {
         return true;
     }
 
-    virtual bool supportsDirectoryPerDB() const override {
+    bool supportsDirectoryPerDB() const override {
         return false;
     }
 
-    virtual int flushAllFiles(OperationContext* opCtx, bool sync) override;
+    int flushAllFiles(OperationContext* opCtx, bool sync) override;
 
-    virtual Status beginBackup(OperationContext* opCtx) override;
+    Status beginBackup(OperationContext* opCtx) override;
 
-    virtual void endBackup(OperationContext* opCtx) override;
+    void endBackup(OperationContext* opCtx) override;
 
-    virtual Status hotBackup(const std::string& path);
+    Status hotBackup(const std::string& path);
 
-    virtual bool isDurable() const override {
+    bool isDurable() const override {
         return _durable;
     }
 
-    virtual bool isEphemeral() const override {
+    bool isEphemeral() const override {
         return false;
     }
 
-    virtual int64_t getIdentSize(OperationContext* opCtx, StringData ident);
+    int64_t getIdentSize(OperationContext* opCtx, StringData ident);
 
-    virtual Status repairIdent(OperationContext* opCtx, StringData ident) {
+    Status repairIdent(OperationContext* opCtx, StringData ident) {
         return Status::OK();
     }
 
-    virtual void cleanShutdown();
+    void cleanShutdown();
 
-    virtual SnapshotManager* getSnapshotManager() const final {
+    SnapshotManager* getSnapshotManager() const final {
         return (SnapshotManager*)&_snapshotManager;
     }
 
@@ -153,16 +153,16 @@ public:
      */
     static bool initRsOplogBackgroundThread(StringData ns);
 
-    virtual void setJournalListener(JournalListener* jl);
+    void setJournalListener(JournalListener* jl);
 
-    virtual Timestamp getAllDurableTimestamp() const override {
+    Timestamp getAllDurableTimestamp() const override {
         if (_snapshotManager.haveCommittedSnapshot()) {
             return *_snapshotManager.getCommittedSnapshot();
         }
         return Timestamp();
     }
 
-    virtual Timestamp getOldestOpenReadTimestamp() const override {
+    Timestamp getOldestOpenReadTimestamp() const override {
         return Timestamp();
     }
 
