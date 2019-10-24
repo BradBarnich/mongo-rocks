@@ -71,7 +71,7 @@ public:
 
     boost::optional<Timestamp> getCommittedSnapshot() const;
 
-    boost::optional<Timestamp> getLocalSnapshot() const;
+    boost::optional<Timestamp> getLocalSnapshot();
 
 private:
     mutable stdx::mutex _committedSnapshotMutex;  // Guards _committedSnapshot

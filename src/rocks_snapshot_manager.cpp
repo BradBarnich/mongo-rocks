@@ -54,7 +54,7 @@ namespace mongo {
             _localSnapshot = timestamp;
     }
 
-    boost::optional<Timestamp> RocksSnapshotManager::getLocalSnapshot() const {
+    boost::optional<Timestamp> RocksSnapshotManager::getLocalSnapshot() {
         stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
         return _localSnapshot;
     }
