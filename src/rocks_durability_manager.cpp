@@ -34,23 +34,23 @@
 #include "rocks_util.h"
 
 namespace mongo {
-    RocksDurabilityManager::RocksDurabilityManager(rocksdb::DB* db, bool durable)
-        : _db(db), _durable(durable), _journalListener(&NoOpJournalListener::instance) {}
+RocksDurabilityManager::RocksDurabilityManager(rocksdb::DB* db, bool durable)
+    : _db(db), _durable(durable), _journalListener(&NoOpJournalListener::instance) {}
 
-    void RocksDurabilityManager::setJournalListener(JournalListener* jl) {
-        stdx::unique_lock<stdx::mutex> lk(_journalListenerMutex);
-        _journalListener = jl;
+void RocksDurabilityManager::setJournalListener(JournalListener* jl) {
+    stdx::unique_lock<stdx::mutex> lk(_journalListenerMutex);
+    _journalListener = jl;
+}
+
+void RocksDurabilityManager::waitUntilDurable(bool forceFlush) {
+    stdx::unique_lock<stdx::mutex> lk(_journalListenerMutex);
+    JournalListener::Token token = _journalListener->getToken();
+    if (!_durable || forceFlush) {
+        invariantRocksOK(_db->Flush(rocksdb::FlushOptions()));
+    } else {
+        invariantRocksOK(_db->SyncWAL());
     }
+    _journalListener->onDurable(token);
+}
 
-    void RocksDurabilityManager::waitUntilDurable(bool forceFlush) {
-        stdx::unique_lock<stdx::mutex> lk(_journalListenerMutex);
-        JournalListener::Token token = _journalListener->getToken();
-        if (!_durable || forceFlush) {
-            invariantRocksOK(_db->Flush(rocksdb::FlushOptions()));
-        } else {
-            invariantRocksOK(_db->SyncWAL());
-        }
-        _journalListener->onDurable(token);
-    }
-
-} // namespace mongo
+}  // namespace mongo

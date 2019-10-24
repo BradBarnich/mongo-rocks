@@ -29,55 +29,55 @@
 
 #include "rocks_util.h"
 
-#include <string>
 #include <rocksdb/status.h>
+#include <string>
 
 // Temporary fix for https://github.com/facebook/rocksdb/pull/2336#issuecomment-303226208
 #define ROCKSDB_SUPPORT_THREAD_LOCAL
-#include <rocksdb/version.h>
 #include <rocksdb/perf_context.h>
+#include <rocksdb/version.h>
 
 #include "mongo/platform/endian.h"
 
 namespace mongo {
-    std::string encodePrefix(uint32_t prefix) {
-        uint32_t bigEndianPrefix = endian::nativeToBig(prefix);
-        return std::string(reinterpret_cast<const char*>(&bigEndianPrefix), sizeof(uint32_t));
+std::string encodePrefix(uint32_t prefix) {
+    uint32_t bigEndianPrefix = endian::nativeToBig(prefix);
+    return std::string(reinterpret_cast<const char*>(&bigEndianPrefix), sizeof(uint32_t));
+}
+
+std::string encodeTimestamp(uint64_t prefix) {
+    uint64_t bigEndianPrefix = endian::nativeToBig(prefix);
+    return std::string(reinterpret_cast<const char*>(&bigEndianPrefix), sizeof(uint64_t));
+}
+
+// we encode prefixes in big endian because we want to quickly jump to the max prefix
+// (iter->SeekToLast())
+bool extractPrefix(const rocksdb::Slice& slice, uint32_t* prefix) {
+    if (slice.size() < sizeof(uint32_t)) {
+        return false;
+    }
+    *prefix = endian::bigToNative(*reinterpret_cast<const uint32_t*>(slice.data()));
+    return true;
+}
+
+int get_internal_delete_skipped_count() {
+#if ROCKSDB_MAJOR > 5 || (ROCKSDB_MAJOR == 5 && ROCKSDB_MINOR >= 6)
+    return rocksdb::get_perf_context()->internal_delete_skipped_count;
+#else
+    return rocksdb::perf_context.internal_delete_skipped_count;
+#endif
+}
+
+Status rocksToMongoStatus_slow(const rocksdb::Status& status, const char* prefix) {
+    if (status.ok()) {
+        return Status::OK();
     }
 
-    std::string encodeTimestamp(uint64_t prefix) {
-        uint64_t bigEndianPrefix = endian::nativeToBig(prefix);
-        return std::string(reinterpret_cast<const char*>(&bigEndianPrefix), sizeof(uint64_t));
+    if (status.IsCorruption()) {
+        return Status(ErrorCodes::BadValue, status.ToString());
     }
 
-    // we encode prefixes in big endian because we want to quickly jump to the max prefix
-    // (iter->SeekToLast())
-    bool extractPrefix(const rocksdb::Slice& slice, uint32_t* prefix) {
-        if (slice.size() < sizeof(uint32_t)) {
-            return false;
-        }
-        *prefix = endian::bigToNative(*reinterpret_cast<const uint32_t*>(slice.data()));
-        return true;
-    }
-
-    int get_internal_delete_skipped_count() {
-        #if ROCKSDB_MAJOR > 5 || (ROCKSDB_MAJOR == 5 && ROCKSDB_MINOR >= 6)
-            return rocksdb::get_perf_context()->internal_delete_skipped_count;
-        #else
-            return rocksdb::perf_context.internal_delete_skipped_count;
-        #endif
-    }
-
-    Status rocksToMongoStatus_slow(const rocksdb::Status& status, const char* prefix) {
-        if (status.ok()) {
-            return Status::OK();
-        }
-
-        if (status.IsCorruption()) {
-            return Status(ErrorCodes::BadValue, status.ToString());
-        }
-
-        return Status(ErrorCodes::InternalError, status.ToString());
-    }
+    return Status(ErrorCodes::InternalError, status.ToString());
+}
 
 }  // namespace mongo

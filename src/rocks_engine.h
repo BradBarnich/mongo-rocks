@@ -156,9 +156,9 @@ public:
     void setJournalListener(JournalListener* jl);
 
     Timestamp getAllDurableTimestamp() const override {
-        if (_snapshotManager.haveCommittedSnapshot()) {
-            return *_snapshotManager.getCommittedSnapshot();
-        }
+        // if (_snapshotManager.haveCommittedSnapshot()) {
+        //     return *_snapshotManager.getCommittedSnapshot();
+        // }
         return Timestamp();
     }
 
@@ -166,11 +166,54 @@ public:
         return Timestamp();
     }
 
-    boost::optional<Timestamp> getOplogNeededForCrashRecovery() const final {
+    bool supportsReadConcernSnapshot() const override {
+        return true;
+    }
+
+    bool supportsReadConcernMajority() const override {
+        return true;
+    }
+
+    /**
+     * Returns the minimum possible Timestamp value in the oplog that replication may need for
+     * recovery in the event of a crash. This value gets updated every time a checkpoint is
+     * completed. This value is typically a lagged version of what's needed for rollback.
+     *
+     * Returns boost::none when called on an ephemeral database.
+     */
+    boost::optional<Timestamp> getOplogNeededForCrashRecovery() const override {
         return boost::none;
     }
 
     // rocks specific api
+
+    /*
+     * An oplog manager is always accessible, but this method will start the background thread to
+     * control oplog entry visibility for reads.
+     *
+     * On mongod, the background thread will be started when the first oplog record store is
+     * created, and stopped when the last oplog record store is destroyed, at shutdown time. For
+     * unit tests, the background thread may be started and stopped multiple times as tests create
+     * and destroy oplog record stores.
+     */
+    // void startOplogManager(OperationContext* opCtx,
+    //                        const std::string& uri,
+    //                        WiredTigerRecordStore* oplogRecordStore);
+    // void haltOplogManager();
+
+    /*
+     * Always returns a non-nil pointer. However, the WiredTigerOplogManager may not have been
+     * initialized and its background refreshing thread may not be running.
+     *
+     * A caller that wants to get the oplog read timestamp, or call
+     * `waitForAllEarlierOplogWritesToBeVisible`, is advised to first see if the oplog manager is
+     * running with a call to `isRunning`.
+     *
+     * A caller that simply wants to call `triggerJournalFlush` may do so without concern.
+     */
+    // WiredTigerOplogManager* getOplogManager() const {
+    //     return _oplogManager.get();
+    // }
 
     rocksdb::DB* getDB() {
         return _db.get();

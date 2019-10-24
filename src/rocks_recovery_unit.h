@@ -139,6 +139,10 @@ namespace mongo {
 	      }
 	      return 0;
 	    }
+
+      // bool Equal(const rocksdb::Slice& a, const rocksdb::Slice& b) const override {
+      //   return CompareWithoutTimestamp(a, b) == 0;
+      // }
 	  };
     
     // Same as rocksdb::Iterator, but adds couple more useful functions
@@ -271,7 +275,7 @@ namespace mongo {
     private:
         void _releaseSnapshot();
 
-        void _commit();
+        void _commit(boost::optional<Timestamp> commitTime);
 
         void _abort();
         RocksTransactionEngine* _transactionEngine;      // not owned
@@ -280,6 +284,7 @@ namespace mongo {
         RocksCounterManager* _counterManager;            // not owned
         RocksCompactionScheduler* _compactionScheduler;  // not owned
         RocksDurabilityManager* _durabilityManager;      // not owned
+        OperationContext* _opCtx;                        // not owned
 
         const bool _durable;
 

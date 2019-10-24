@@ -43,6 +43,8 @@
 
 #include "mongo/base/checked_cast.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
+#include "mongo/db/global_settings.h"
+#include "mongo/db/logical_clock.h"
 #include "mongo/db/operation_context.h"
 #include "mongo/db/server_options.h"
 #include "mongo/db/storage/journal_listener.h"
@@ -264,21 +266,25 @@ RocksRecoveryUnit::~RocksRecoveryUnit() {
 
 void RocksRecoveryUnit::beginUnitOfWork(OperationContext* opCtx) {
     invariant(!_areWriteUnitOfWorksBanned);
+    _opCtx = opCtx;
 }
 
 void RocksRecoveryUnit::commitUnitOfWork() {
-    _commit();
 
-    // if(_lastTimestampSet)
-    // {
-    //     log() << "commit: " << _lastTimestampSet;
-    // } else {
-    //    log() << "no commit timestamp";
+    // Since we cannot have both a _lastTimestampSet and a _commitTimestamp, we set the
+    // commit time as whichever is non-empty. If both are empty, then _lastTimestampSet will
+    // be boost::none and we'll set the commit time to that.
+    auto commitTime = _commitTimestamp.isNull() ? _lastTimestampSet : _commitTimestamp;
+
+    // if(!commitTime && getGlobalReplSettings().usingReplSets()) {
+    //     commitTime = LogicalClock::get(_opCtx)->getClusterTime().asTimestamp();
     // }
+
+    _commit(commitTime);
 
     try {
         for (Changes::const_iterator it = _changes.begin(), end = _changes.end(); it != end; ++it) {
-            (*it)->commit(_lastTimestampSet);
+            (*it)->commit(commitTime);
         }
         _changes.clear();
     } catch (...) {
@@ -287,6 +293,7 @@ void RocksRecoveryUnit::commitUnitOfWork() {
 
     _lastTimestampSet = boost::none;
     _releaseSnapshot();
+    _opCtx = nullptr;
 }
 
 void RocksRecoveryUnit::abortUnitOfWork() {
@@ -307,8 +314,11 @@ void RocksRecoveryUnit::abandonSnapshot() {
 }
 
 void RocksRecoveryUnit::Put(const rocksdb::Slice& key, const rocksdb::Slice& value) {
-    // log() << "put: " << key.ToString(true) << ", timestamp: " <<
-    // _lastTimestampSet.value_or(Timestamp());
+    log() << "put: " << key.ToString(true)
+          << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
+    // if (_lastTimestampSet) {
+    //     log() << "commit: " << _lastTimestampSet;
+    // }
     invariantRocksOK(_writeBatch.Put(key, value));
     _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
 }
@@ -316,14 +326,22 @@ void RocksRecoveryUnit::Put(const rocksdb::Slice& key, const rocksdb::Slice& val
 void RocksRecoveryUnit::Put(const rocksdb::Slice& key,
                             const rocksdb::Slice& value,
                             const Timestamp timestamp) {
-    // log() << "put: " << key.ToString(true) << ", timestamp: " << timestamp;
+
     invariantRocksOK(_writeBatch.Put(key, value));
-    _timestamps.push_back(encodeTimestamp(timestamp.asULL()));
+
+    if (timestamp != Timestamp(0, 0)) {
+        log() << "put: " << key.ToString(true) << ", timestamp: " << timestamp;
+        _timestamps.push_back(encodeTimestamp(timestamp.asULL()));
+    } else {
+        log() << "put: " << key.ToString(true)
+              << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
+        _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
+    }
 }
 
 void RocksRecoveryUnit::Delete(const rocksdb::Slice& key) {
-    // log() << "delete: " << key.ToString(true) << ", timestamp: " <<
-    // _lastTimestampSet.value_or(Timestamp());
+    log() << "delete: " << key.ToString(true)
+          << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
     invariantRocksOK(_writeBatch.Delete(key));
     _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
 }
@@ -337,6 +355,8 @@ void RocksRecoveryUnit::DeleteRange(const rocksdb::Slice& begin_key,
 }
 
 void RocksRecoveryUnit::SingleDelete(const rocksdb::Slice& key) {
+    // log() << "singledelete: " << key.ToString(true)
+    //       << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
     invariantRocksOK(_writeBatch.SingleDelete(key));
     _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
 }
@@ -440,17 +460,23 @@ void RocksRecoveryUnit::_releaseSnapshot() {
     _mySnapshotId = nextSnapshotId.fetchAndAdd(1);
 }
 
-void RocksRecoveryUnit::_commit() {
+void RocksRecoveryUnit::_commit(boost::optional<Timestamp> commitTime) {
     rocksdb::WriteBatch* wb = _writeBatch.GetWriteBatch();
 
     std::vector<rocksdb::Slice> timestampSlices;
 
     auto zeroTs = encodeTimestamp(0ULL);
+
     for (const auto& ts : _timestamps) {
-        if (_lastTimestampSet.has_value() && ts.compare(zeroTs) == 0) {
-            timestampSlices.emplace_back(encodeTimestamp(_lastTimestampSet.get().asULL()));
+        if (commitTime && ts.compare(zeroTs) == 0) {
+            timestampSlices.emplace_back(encodeTimestamp(commitTime->asULL()));
+            log() << "commit operation at: " << commitTime;
         } else {
             timestampSlices.emplace_back(ts);
+
+            uint64_t ts_ull;
+            ts_ull = endian::bigToNative(*reinterpret_cast<const uint64_t*>(ts.data()));
+            log() << "commit operation at: " << Timestamp(ts_ull);
         }
     }
 
@@ -475,7 +501,10 @@ void RocksRecoveryUnit::_commit() {
     _writeBatch.Clear();
     _timestamps.clear();
 
-    // _db->Flush(rocksdb::FlushOptions());
+    // this started causing a crash
+    _db->Flush(rocksdb::FlushOptions());
+    rocksdb::CompactRangeOptions options;
+    _db->CompactRange(options, nullptr, nullptr);
 }
 
 void RocksRecoveryUnit::_abort() {
@@ -495,7 +524,7 @@ void RocksRecoveryUnit::_abort() {
     _deltaCounters.clear();
     _writeBatch.Clear();
     _timestamps.clear();
-
+    _lastTimestampSet = boost::none;
     _releaseSnapshot();
 }
 
@@ -544,9 +573,12 @@ rocksdb::Status RocksRecoveryUnit::Get(const rocksdb::Slice& key, std::string* v
     }
     rocksdb::ReadOptions options;
     options.snapshot = snapshot();
-    // log() << "Get at snapshot " << options.snapshot->GetSequenceNumber();
+
     std::string timestamp = getReadTimestamp();
     rocksdb::Slice readTimestamp(timestamp);
+    uint64_t ts_ull = endian::bigToNative(*reinterpret_cast<const uint64_t*>(timestamp.data()));
+    log() << "Get at snapshot " << options.snapshot->GetSequenceNumber()
+          << " at ts: " << Timestamp(ts_ull);
     options.timestamp = &readTimestamp;
 
     return _db->Get(options, key, value);
@@ -559,8 +591,11 @@ RocksIterator* RocksRecoveryUnit::NewIterator(std::string prefix, bool isOplog) 
     rocksdb::ReadOptions options;
     options.iterate_upper_bound = upperBound.get();
     options.snapshot = snapshot();
-    // log() << "NewIterator at snapshot " << options.snapshot->GetSequenceNumber() << " and
-    // timestamp " << timestamp;
+
+    uint64_t ts_ull = endian::bigToNative(*reinterpret_cast<const uint64_t*>(timestamp.data()));
+
+    log() << "NewIterator at snapshot " << options.snapshot->GetSequenceNumber()
+          << " and timestamp " << Timestamp(ts_ull);
     options.timestamp = timestampSlice.get();
     auto iterator = _writeBatch.NewIteratorWithBase(_db->NewIterator(options));
     auto prefixIterator = new PrefixStrippingIterator(std::move(prefix),
