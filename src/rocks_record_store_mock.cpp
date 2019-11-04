@@ -32,7 +32,6 @@
 #include "mongo/base/init.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/service_context.h"
-#include "mongo/stdx/memory.h"
 
 #include "rocks_engine.h"
 

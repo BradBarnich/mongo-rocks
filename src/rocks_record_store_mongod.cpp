@@ -31,8 +31,8 @@
 
 #include "mongo/platform/basic.h"
 
-#include <set>
 #include <mutex>
+#include <set>
 
 #include "mongo/base/checked_cast.h"
 #include "mongo/db/catalog/collection.h"
@@ -40,9 +40,9 @@
 #include "mongo/db/client.h"
 #include "mongo/db/concurrency/d_concurrency.h"
 #include "mongo/db/db_raii.h"
-#include "mongo/db/service_context.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/operation_context.h"
+#include "mongo/db/service_context.h"
 #include "mongo/util/background.h"
 #include "mongo/util/exit.h"
 #include "mongo/util/log.h"
@@ -53,116 +53,113 @@
 
 namespace mongo {
 
-    namespace {
+namespace {
 
-        std::set<NamespaceString> _backgroundThreadNamespaces;
-        stdx::mutex _backgroundThreadMutex;
+std::set<NamespaceString> _backgroundThreadNamespaces;
+stdx::mutex _backgroundThreadMutex;
 
-        class RocksRecordStoreThread : public BackgroundJob {
-        public:
-            RocksRecordStoreThread(const NamespaceString& ns)
-                : BackgroundJob(true /* deleteSelf */), _ns(ns) {
-                _name = std::string("RocksRecordStoreThread for ") + _ns.toString();
-            }
-
-            virtual std::string name() const {
-                return _name;
-            }
-
-            /**
-             * @return Number of documents deleted.
-             */
-            int64_t _deleteExcessDocuments() {
-                if (!getGlobalServiceContext()->getStorageEngine()) {
-                    LOG(1) << "no global storage engine yet";
-                    return 0;
-                }
-
-                const auto opCtx = cc().makeOperationContext();
-
-                try {
-                    AutoGetDb autoDb(opCtx.get(), _ns.db(), MODE_IX);
-                    Database* db = autoDb.getDb();
-                    if (!db) {
-                        LOG(2) << "no local database yet";
-                        return 0;
-                    }
-
-                    Lock::CollectionLock collectionLock(opCtx.get(), _ns, MODE_IX);
-                    Collection* collection = db->getCollection(opCtx.get(), _ns);
-                    if (!collection) {
-                        LOG(2) << "no collection " << _ns;
-                        return 0;
-                    }
-
-                    OldClientContext ctx(opCtx.get(), _ns.ns(), false);
-                    RocksRecordStore* rs =
-                        checked_cast<RocksRecordStore*>(collection->getRecordStore());
-                    WriteUnitOfWork wuow(opCtx.get());
-                    stdx::lock_guard<stdx::timed_mutex> lock(rs->cappedDeleterMutex());
-                    int64_t removed = rs->cappedDeleteAsNeeded_inlock(opCtx.get(), RecordId::max());
-                    wuow.commit();
-                    return removed;
-                }
-                catch (const std::exception& e) {
-                    severe() << "error in RocksRecordStoreThread: " << redact(e.what());
-                    fassertFailedNoTrace(!"error in RocksRecordStoreThread");
-                }
-                catch (...) {
-                    fassertFailedNoTrace(!"unknown error in RocksRecordStoreThread");
-                }
-            }
-
-            virtual void run() {
-                Client::initThread(_name.c_str());
-
-                while (!globalInShutdownDeprecated()) {
-                    int64_t removed = _deleteExcessDocuments();
-                    LOG(2) << "RocksRecordStoreThread deleted " << removed;
-                    if (removed == 0) {
-                        // If we removed 0 documents, sleep a bit in case we're on a laptop
-                        // or something to be nice.
-                        sleepmillis(1000);
-                    } else {
-                        // wake up every 100ms
-                        sleepmillis(100);
-                    }
-                }
-
-                log() << "shutting down";
-            }
-
-        private:
-            NamespaceString _ns;
-            std::string _name;
-        };
-
-    }  // namespace
-
-    // static
-    bool RocksEngine::initRsOplogBackgroundThread(StringData ns) {
-        if (!NamespaceString::oplog(ns)) {
-            return false;
-        }
-
-        if (storageGlobalParams.repair || storageGlobalParams.readOnly) {
-            LOG(1) << "not starting RocksRecordStoreThread for " << ns
-                   << " because we are either in repair or read-only mode";
-            return false;
-        }
-
-        stdx::lock_guard<stdx::mutex> lock(_backgroundThreadMutex);
-        NamespaceString nss(ns);
-        if (_backgroundThreadNamespaces.count(nss)) {
-            log() << "RocksRecordStoreThread " << ns << " already started";
-        }
-        else {
-            log() << "Starting RocksRecordStoreThread " << ns;
-            BackgroundJob* backgroundThread = new RocksRecordStoreThread(nss);
-            backgroundThread->go();
-            _backgroundThreadNamespaces.insert(nss);
-        }
-        return true;
+class RocksRecordStoreThread : public BackgroundJob {
+public:
+    RocksRecordStoreThread(const NamespaceString& ns)
+        : BackgroundJob(true /* deleteSelf */), _ns(ns) {
+        _name = std::string("RocksRecordStoreThread for ") + _ns.toString();
     }
+
+    virtual std::string name() const {
+        return _name;
+    }
+
+    /**
+     * @return Number of documents deleted.
+     */
+    int64_t _deleteExcessDocuments() {
+        if (!getGlobalServiceContext()->getStorageEngine()) {
+            LOG(1) << "no global storage engine yet";
+            return 0;
+        }
+
+        const auto opCtx = cc().makeOperationContext();
+
+        try {
+            AutoGetDb autoDb(opCtx.get(), _ns.db(), MODE_IX);
+            Database* db = autoDb.getDb();
+            if (!db) {
+                LOG(2) << "no local database yet";
+                return 0;
+            }
+
+            Lock::CollectionLock collectionLock(opCtx.get(), _ns, MODE_IX);
+            Collection* collection =
+                CollectionCatalog::get(opCtx.get()).lookupCollectionByNamespace(_ns);
+            if (!collection) {
+                LOG(2) << "no collection " << _ns;
+                return 0;
+            }
+
+            OldClientContext ctx(opCtx.get(), _ns.ns(), false);
+            RocksRecordStore* rs = checked_cast<RocksRecordStore*>(collection->getRecordStore());
+            WriteUnitOfWork wuow(opCtx.get());
+            stdx::lock_guard<stdx::timed_mutex> lock(rs->cappedDeleterMutex());
+            int64_t removed = rs->cappedDeleteAsNeeded_inlock(opCtx.get(), RecordId::max());
+            wuow.commit();
+            return removed;
+        } catch (const std::exception& e) {
+            severe() << "error in RocksRecordStoreThread: " << redact(e.what());
+            fassertFailedNoTrace(!"error in RocksRecordStoreThread");
+        } catch (...) {
+            fassertFailedNoTrace(!"unknown error in RocksRecordStoreThread");
+        }
+    }
+
+    virtual void run() {
+        Client::initThread(_name.c_str());
+
+        while (!globalInShutdownDeprecated()) {
+            int64_t removed = _deleteExcessDocuments();
+            LOG(2) << "RocksRecordStoreThread deleted " << removed;
+            if (removed == 0) {
+                // If we removed 0 documents, sleep a bit in case we're on a laptop
+                // or something to be nice.
+                sleepmillis(1000);
+            } else {
+                // wake up every 100ms
+                sleepmillis(100);
+            }
+        }
+
+        log() << "shutting down";
+    }
+
+private:
+    NamespaceString _ns;
+    std::string _name;
+};
+
+}  // namespace
+
+// static
+bool RocksEngine::initRsOplogBackgroundThread(StringData ns) {
+    if (!NamespaceString::oplog(ns)) {
+        return false;
+    }
+
+    if (storageGlobalParams.repair || storageGlobalParams.readOnly) {
+        LOG(1) << "not starting RocksRecordStoreThread for " << ns
+               << " because we are either in repair or read-only mode";
+        return false;
+    }
+
+    stdx::lock_guard<stdx::mutex> lock(_backgroundThreadMutex);
+    NamespaceString nss(ns);
+    if (_backgroundThreadNamespaces.count(nss)) {
+        log() << "RocksRecordStoreThread " << ns << " already started";
+    } else {
+        log() << "Starting RocksRecordStoreThread " << ns;
+        BackgroundJob* backgroundThread = new RocksRecordStoreThread(nss);
+        backgroundThread->go();
+        _backgroundThreadNamespaces.insert(nss);
+    }
+    return true;
+}
 
 }  // namespace mongo

@@ -51,7 +51,6 @@
 #include "mongo/db/operation_context.h"
 #include "mongo/db/storage/oplog_hack.h"
 #include "mongo/platform/endian.h"
-#include "mongo/stdx/memory.h"
 #include "mongo/util/assert_util.h"
 #include "mongo/util/background.h"
 #include "mongo/util/concurrency/idle_thread_block.h"
@@ -116,7 +115,8 @@ void CappedVisibilityManager::_addUncommittedRecord_inlock(OperationContext* opC
                                                            const RecordId& record) {
     dassert(_uncommittedRecords.empty() || _uncommittedRecords.back() < record);
     SortedRecordIds::iterator it = _uncommittedRecords.insert(_uncommittedRecords.end(), record);
-    opCtx->recoveryUnit()->registerChange(new RocksRecordStore::CappedInsertChange(this, _rs, it));
+    opCtx->recoveryUnit()->registerChange(
+        std::make_unique<RocksRecordStore::CappedInsertChange>(this, _rs, it));
 
     if (record > _oplog_highestSeen) {
         _oplog_highestSeen = record;
@@ -746,41 +746,6 @@ StatusWith<RecordId> RocksRecordStore::insertRecord(OperationContext* opCtx,
     return StatusWith<RecordId>(loc);
 }
 
-Status RocksRecordStore::insertRecordsWithDocWriter(OperationContext* opCtx,
-                                                    const DocWriter* const* docs,
-                                                    const Timestamp* timestamps,
-                                                    size_t nDocs,
-                                                    RecordId* idsOut) {
-    std::unique_ptr<Record[]> records(new Record[nDocs]);
-
-    size_t totalSize = 0;
-    for (size_t i = 0; i < nDocs; i++) {
-        const size_t docSize = docs[i]->documentSize();
-        records[i].data = RecordData(nullptr, docSize);  // We fill in the real ptr in next loop.
-        totalSize += docSize;
-    }
-
-    std::unique_ptr<char[]> buffer(new char[totalSize]);
-    char* pos = buffer.get();
-    for (size_t i = 0; i < nDocs; i++) {
-        docs[i]->writeDocument(pos);
-        const size_t size = records[i].data.size();
-        records[i].data = RecordData(pos, size);
-        pos += size;
-    }
-    invariant(pos == (buffer.get() + totalSize));
-
-    for (size_t i = 0; i < nDocs; ++i) {
-        auto s = insertRecord(opCtx, records[i].data.data(), records[i].data.size(), timestamps[i]);
-        if (!s.isOK())
-            return s.getStatus();
-        if (idsOut)
-            idsOut[i] = s.getValue();
-    }
-
-    return Status::OK();
-}
-
 Status RocksRecordStore::updateRecord(OperationContext* opCtx,
                                       const RecordId& loc,
                                       const char* data,
@@ -840,7 +805,7 @@ std::unique_ptr<SeekableRecordCursor> RocksRecordStore::getCursor(OperationConte
         startIterator = _cappedOldestKeyHint;
     }
 
-    return stdx::make_unique<Cursor>(
+    return std::make_unique<Cursor>(
         opCtx, _db, _prefix, _cappedVisibilityManager, forward, _isCapped, startIterator);
 }
 
@@ -869,7 +834,6 @@ Status RocksRecordStore::compact(OperationContext* opCtx) {
 }
 
 void RocksRecordStore::validate(OperationContext* opCtx,
-                                ValidateCmdLevel level,
                                 ValidateResults* results,
                                 BSONObjBuilder* output) {}
 

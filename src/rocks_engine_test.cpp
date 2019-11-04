@@ -28,7 +28,6 @@
 
 #include "mongo/base/init.h"
 #include "mongo/platform/basic.h"
-#include "mongo/stdx/memory.h"
 
 #include <boost/filesystem/operations.hpp>
 #include <memory>
@@ -38,6 +37,7 @@
 #include <rocksdb/options.h>
 #include <rocksdb/slice.h>
 
+#include "mongo/db/service_context_test_fixture.h"
 #include "mongo/db/storage/kv/kv_engine.h"
 #include "mongo/db/storage/kv/kv_engine_test_harness.h"
 #include "mongo/unittest/temp_dir.h"
@@ -46,36 +46,38 @@
 
 namespace mongo {
 namespace {
-    class RocksEngineHarnessHelper : public KVHarnessHelper {
-    public:
-        RocksEngineHarnessHelper() : _dbpath("mongo-rocks-engine-test") {
-            boost::filesystem::remove_all(_dbpath.path());
-            restartEngine();
-        }
-
-        virtual ~RocksEngineHarnessHelper() = default;
-
-        virtual KVEngine* getEngine() { return _engine.get(); }
-
-        virtual KVEngine* restartEngine() {
-            _engine.reset(nullptr);
-            _engine.reset(new RocksEngine(_dbpath.path(), false, 3, false));
-            return _engine.get();
-        }
-
-    private:
-        unittest::TempDir _dbpath;
-
-        std::unique_ptr<RocksEngine> _engine;
-    };
-
-    std::unique_ptr<KVHarnessHelper> makeHelper() {
-        return stdx::make_unique<RocksEngineHarnessHelper>();
+class RocksEngineHarnessHelper : public KVHarnessHelper, public ScopedGlobalServiceContextForTest {
+public:
+    RocksEngineHarnessHelper() : _dbpath("mongo-rocks-engine-test") {
+        boost::filesystem::remove_all(_dbpath.path());
+        restartEngine();
     }
 
-    MONGO_INITIALIZER(RegisterKVHarnessFactory)(InitializerContext*) {
-        KVHarnessHelper::registerFactory(makeHelper);
-        return Status::OK();
+    virtual ~RocksEngineHarnessHelper() = default;
+
+    virtual KVEngine* getEngine() {
+        return _engine.get();
     }
+
+    virtual KVEngine* restartEngine() {
+        _engine.reset(nullptr);
+        _engine.reset(new RocksEngine(_dbpath.path(), false, 3, false));
+        return _engine.get();
+    }
+
+private:
+    unittest::TempDir _dbpath;
+
+    std::unique_ptr<RocksEngine> _engine;
+};
+
+std::unique_ptr<KVHarnessHelper> makeHelper() {
+    return std::make_unique<RocksEngineHarnessHelper>();
 }
+
+MONGO_INITIALIZER(RegisterKVHarnessFactory)(InitializerContext*) {
+    KVHarnessHelper::registerFactory(makeHelper);
+    return Status::OK();
 }
+}  // namespace
+}  // namespace mongo

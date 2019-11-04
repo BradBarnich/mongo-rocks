@@ -59,7 +59,6 @@
 #include "mongo/db/operation_context.h"
 #include "mongo/db/storage/journal_listener.h"
 #include "mongo/idl/server_parameter.h"
-#include "mongo/stdx/memory.h"
 #include "mongo/util/background.h"
 #include "mongo/util/concurrency/idle_thread_block.h"
 #include "mongo/util/concurrency/ticketholder.h"
@@ -139,7 +138,7 @@ public:
     }
     virtual Status setFromString(const std::string& str) {
         int num = 0;
-        Status status = parseNumberFromString(str, &num);
+        Status status = NumberParser{}(str, &num);
         if (!status.isOK())
             return status;
         return _set(num);
@@ -265,7 +264,7 @@ RocksEngine::RocksEngine(const std::string& path, bool durable, int formatVersio
     _durabilityManager.reset(new RocksDurabilityManager(_db.get(), _durable));
 
     if (_durable) {
-        _journalFlusher = stdx::make_unique<RocksJournalFlusher>(_durabilityManager.get());
+        _journalFlusher = std::make_unique<RocksJournalFlusher>(_durabilityManager.get());
         _journalFlusher->go();
     }
 
@@ -343,24 +342,24 @@ std::unique_ptr<RecordStore> RocksEngine::getRecordStore(OperationContext* opCtx
     std::string prefix = _extractPrefix(config);
 
     std::unique_ptr<RocksRecordStore> recordStore = options.capped
-        ? stdx::make_unique<RocksRecordStore>(ns,
-                                              ident,
-                                              _db.get(),
-                                              _counterManager.get(),
-                                              _durabilityManager.get(),
-                                              _compactionScheduler.get(),
-                                              prefix,
-                                              true,
-                                              options.cappedSize ? options.cappedSize
-                                                                 : 4096,  // default size
-                                              options.cappedMaxDocs ? options.cappedMaxDocs : -1)
-        : stdx::make_unique<RocksRecordStore>(ns,
-                                              ident,
-                                              _db.get(),
-                                              _counterManager.get(),
-                                              _durabilityManager.get(),
-                                              _compactionScheduler.get(),
-                                              prefix);
+        ? std::make_unique<RocksRecordStore>(ns,
+                                             ident,
+                                             _db.get(),
+                                             _counterManager.get(),
+                                             _durabilityManager.get(),
+                                             _compactionScheduler.get(),
+                                             prefix,
+                                             true,
+                                             options.cappedSize ? options.cappedSize
+                                                                : 4096,  // default size
+                                             options.cappedMaxDocs ? options.cappedMaxDocs : -1)
+        : std::make_unique<RocksRecordStore>(ns,
+                                             ident,
+                                             _db.get(),
+                                             _counterManager.get(),
+                                             _durabilityManager.get(),
+                                             _compactionScheduler.get(),
+                                             prefix);
 
     {
         stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
@@ -377,13 +376,13 @@ std::unique_ptr<RecordStore> RocksEngine::makeTemporaryRecordStore(OperationCont
     auto config = _getIdentConfig(ident);
     std::string prefix = _extractPrefix(config);
 
-    return stdx::make_unique<RocksRecordStore>("",
-                                               ident,
-                                               _db.get(),
-                                               _counterManager.get(),
-                                               _durabilityManager.get(),
-                                               _compactionScheduler.get(),
-                                               prefix);
+    return std::make_unique<RocksRecordStore>("",
+                                              ident,
+                                              _db.get(),
+                                              _counterManager.get(),
+                                              _durabilityManager.get(),
+                                              _compactionScheduler.get(),
+                                              prefix);
 }
 
 Status RocksEngine::createSortedDataInterface(OperationContext* opCtx,
@@ -396,27 +395,28 @@ Status RocksEngine::createSortedDataInterface(OperationContext* opCtx,
     return _createIdent(ident, &configBuilder);
 }
 
-SortedDataInterface* RocksEngine::getSortedDataInterface(OperationContext* opCtx,
-                                                         StringData ident,
-                                                         const IndexDescriptor* desc) {
+std::unique_ptr<SortedDataInterface> RocksEngine::getSortedDataInterface(
+    OperationContext* opCtx, StringData ident, const IndexDescriptor* desc) {
 
     auto config = _getIdentConfig(ident);
     std::string prefix = _extractPrefix(config);
 
-    RocksIndexBase* index;
+    std::unique_ptr<SortedDataInterface> index;
     if (desc->unique()) {
-        index = new RocksUniqueIndex(_db.get(), prefix, ident.toString(), desc, std::move(config));
+        index = std::make_unique<RocksUniqueIndex>(
+            _db.get(), prefix, ident.toString(), desc, std::move(config));
     } else {
-        auto si =
-            new RocksStandardIndex(_db.get(), prefix, ident.toString(), desc, std::move(config));
+        index = std::make_unique<RocksStandardIndex>(
+            _db.get(), prefix, ident.toString(), desc, std::move(config));
+
         if (rocksGlobalOptions.singleDeleteIndex) {
+            auto si = static_cast<RocksStandardIndex*>(index.get());
             si->enableSingleDelete();
         }
-        index = si;
     }
     {
         stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
-        _identIndexMap[ident] = index;
+        _identIndexMap[ident] = static_cast<RocksIndexBase*>(index.get());
     }
     return index;
 }

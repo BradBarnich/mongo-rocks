@@ -40,192 +40,195 @@
 #include "mongo/db/catalog/collection_mock.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/db/storage/sorted_data_interface_test_harness.h"
-#include "mongo/stdx/memory.h"
 #include "mongo/unittest/temp_dir.h"
 #include "mongo/unittest/unittest.h"
 
 #include "rocks_engine.h"
 #include "rocks_index.h"
 #include "rocks_recovery_unit.h"
-#include "rocks_transaction.h"
 #include "rocks_snapshot_manager.h"
+#include "rocks_transaction.h"
 
 namespace mongo {
 namespace {
 
-    using std::string;
+using std::string;
 
-    class RocksIndexHarness final : public SortedDataInterfaceHarnessHelper {
-    public:
-        RocksIndexHarness() : _order(Ordering::make(BSONObj())), _tempDir(_testNamespace) {
-            boost::filesystem::remove_all(_tempDir.path());
-            rocksdb::DB* db;
-            rocksdb::Options options;
-            options.comparator = TimestampComparator();
-            options.create_if_missing = true;
-            auto s = rocksdb::DB::Open(options, _tempDir.path(), &db);
-            ASSERT(s.ok());
-            _db.reset(db);
-            _counterManager = stdx::make_unique<RocksCounterManager>(_db.get(), true);
-            _durabilityManager.reset(new RocksDurabilityManager(_db.get(), true));
-        }
+class RocksIndexHarness final : public SortedDataInterfaceHarnessHelper {
+public:
+    RocksIndexHarness() : _order(Ordering::make(BSONObj())), _tempDir(_testNamespace) {
+        boost::filesystem::remove_all(_tempDir.path());
+        rocksdb::DB* db;
+        rocksdb::Options options;
+        options.comparator = TimestampComparator();
+        options.create_if_missing = true;
+        auto s = rocksdb::DB::Open(options, _tempDir.path(), &db);
+        ASSERT(s.ok());
+        _db.reset(db);
+        _counterManager = std::make_unique<RocksCounterManager>(_db.get(), true);
+        _durabilityManager.reset(new RocksDurabilityManager(_db.get(), true));
+    }
 
-        std::unique_ptr<SortedDataInterface> newSortedDataInterface(bool unique, bool partial) {
-            BSONObjBuilder configBuilder;
+    std::unique_ptr<SortedDataInterface> newIdIndexSortedDataInterface() final {
+        return newSortedDataInterface(true, false);
+    }
 
-            auto collection = std::make_unique<CollectionMock>(NamespaceString(_testNamespace));
+    std::unique_ptr<SortedDataInterface> newSortedDataInterface(bool unique, bool partial) {
+        BSONObjBuilder configBuilder;
 
-            BSONObj spec = BSON("key" << BSON("a" << 1) << "name"
+        auto collection = std::make_unique<CollectionMock>(NamespaceString(_testNamespace));
+
+        BSONObj spec = BSON("key" << BSON("a" << 1) << "name"
                                   << "testIndex"
-                                  << "v"
-                                  << static_cast<int>(IndexDescriptor::kLatestIndexVersion)
-                                  << "ns"
-                                  << _testNamespace
-                                  << "unique"
-                                  << unique);
+                                  << "v" << static_cast<int>(IndexDescriptor::kLatestIndexVersion)
+                                  << "ns" << _testNamespace << "unique" << unique);
 
-            if (partial) {
-                auto partialBSON =
-                    BSON(IndexDescriptor::kPartialFilterExprFieldName.toString() << BSON(""
+        if (partial) {
+            auto partialBSON =
+                BSON(IndexDescriptor::kPartialFilterExprFieldName.toString() << BSON(""
                                                                                      << ""));
-                spec = spec.addField(partialBSON.firstElement());
-            }
-
-            IndexDescriptor desc(collection.get(), "", spec);
-
-            RocksIndexBase::generateConfig(&configBuilder, 4, &desc);
-
-            if (unique) {
-                return stdx::make_unique<RocksUniqueIndex>(_db.get(), "prefix", "ident", &desc,
-                                                           configBuilder.obj());
-            } else {
-                return stdx::make_unique<RocksStandardIndex>(_db.get(), "prefix", "ident", &desc,
-                                                             configBuilder.obj());
-            }
+            spec = spec.addField(partialBSON.firstElement());
         }
 
-        std::unique_ptr<RecoveryUnit> newRecoveryUnit() {
-            return stdx::make_unique<RocksRecoveryUnit>(&_transactionEngine, &_snapshotManager,
-                                                        _db.get(), _counterManager.get(),
-                                                        nullptr, _durabilityManager.get(), true);
+        IndexDescriptor desc(collection.get(), "", spec);
+
+        RocksIndexBase::generateConfig(&configBuilder, 4, &desc);
+
+        if (unique) {
+            return std::make_unique<RocksUniqueIndex>(
+                _db.get(), "prefix", "ident", &desc, configBuilder.obj());
+        } else {
+            return std::make_unique<RocksStandardIndex>(
+                _db.get(), "prefix", "ident", &desc, configBuilder.obj());
         }
-
-    private:
-        Ordering _order;
-        string _testNamespace = "test.rocks";
-        unittest::TempDir _tempDir;
-        std::unique_ptr<rocksdb::DB> _db;
-        RocksTransactionEngine _transactionEngine;
-        RocksSnapshotManager _snapshotManager;
-        std::unique_ptr<RocksDurabilityManager> _durabilityManager;
-        std::unique_ptr<RocksCounterManager> _counterManager;
-    };
-
-    std::unique_ptr<HarnessHelper> makeHarnessHelper() {
-        return stdx::make_unique<RocksIndexHarness>();
     }
 
-    MONGO_INITIALIZER(RegisterHarnessFactory)(InitializerContext* const) {
-        mongo::registerHarnessHelperFactory(makeHarnessHelper);
-        return Status::OK();
+    std::unique_ptr<RecoveryUnit> newRecoveryUnit() {
+        return std::make_unique<RocksRecoveryUnit>(&_transactionEngine,
+                                                   &_snapshotManager,
+                                                   _db.get(),
+                                                   _counterManager.get(),
+                                                   nullptr,
+                                                   _durabilityManager.get(),
+                                                   true);
     }
 
-    TEST(RocksIndexTest, Isolation) {
-        auto harnessHelper = stdx::make_unique<RocksIndexHarness>();
+private:
+    Ordering _order;
+    string _testNamespace = "test.rocks";
+    unittest::TempDir _tempDir;
+    std::unique_ptr<rocksdb::DB> _db;
+    RocksTransactionEngine _transactionEngine;
+    RocksSnapshotManager _snapshotManager;
+    std::unique_ptr<RocksDurabilityManager> _durabilityManager;
+    std::unique_ptr<RocksCounterManager> _counterManager;
+};
 
-        const std::unique_ptr<SortedDataInterface>
-        sorted(harnessHelper->newSortedDataInterface(true, false));
+std::unique_ptr<SortedDataInterfaceHarnessHelper> makeHarnessHelper() {
+    return std::make_unique<RocksIndexHarness>();
+}
 
+MONGO_INITIALIZER(RegisterHarnessFactory)(InitializerContext* const) {
+    mongo::registerSortedDataInterfaceHarnessHelperFactory(makeHarnessHelper);
+    return Status::OK();
+}
+
+TEST(RocksIndexTest, Isolation) {
+    auto harnessHelper = std::make_unique<RocksIndexHarness>();
+
+    const std::unique_ptr<SortedDataInterface> sorted(
+        harnessHelper->newSortedDataInterface(true, false));
+
+    {
+        const ServiceContext::UniqueOperationContext opCtx(harnessHelper->newOperationContext());
+        ASSERT(sorted->isEmpty(opCtx.get()));
+    }
+
+    {
+        const ServiceContext::UniqueOperationContext opCtx(harnessHelper->newOperationContext());
         {
-            const ServiceContext::UniqueOperationContext opCtx(
-                harnessHelper->newOperationContext());
-            ASSERT(sorted->isEmpty(opCtx.get()));
+            WriteUnitOfWork uow(opCtx.get());
+            ASSERT_OK(sorted->insert(opCtx.get(), makeKeyString(sorted.get(), key1, loc1), false));
+            ASSERT_OK(sorted->insert(opCtx.get(), makeKeyString(sorted.get(), key2, loc2), false));
+
+            uow.commit();
         }
+    }
+
+    {
+        const ServiceContext::UniqueOperationContext t1(harnessHelper->newOperationContext());
+        const auto client2 = harnessHelper->serviceContext()->makeClient("c2");
+        const auto t2 = harnessHelper->newOperationContext(client2.get());
+
+        const std::unique_ptr<WriteUnitOfWork> w1(new WriteUnitOfWork(t1.get()));
+        const std::unique_ptr<WriteUnitOfWork> w2(new WriteUnitOfWork(t2.get()));
+
+        ASSERT_OK(sorted->insert(t1.get(), makeKeyString(sorted.get(), key3, loc3), false));
+        ASSERT_OK(sorted->insert(t2.get(), makeKeyString(sorted.get(), key4, loc4), false));
+
+        // this should throw
+        ASSERT_THROWS(sorted->insert(t2.get(), makeKeyString(sorted.get(), key3, loc5), false),
+                      WriteConflictException);
+
+        w1->commit();  // this should succeed
+    }
+
+    {
+        const ServiceContext::UniqueOperationContext t1(harnessHelper->newOperationContext());
+        const auto client2 = harnessHelper->serviceContext()->makeClient("c2");
+        const auto t2 = harnessHelper->newOperationContext(client2.get());
+
+        const std::unique_ptr<WriteUnitOfWork> w2(new WriteUnitOfWork(t2.get()));
+        // ensure we start w2 transaction
+        ASSERT_OK(sorted->insert(t2.get(), makeKeyString(sorted.get(), key4, loc4), false));
 
         {
-            const ServiceContext::UniqueOperationContext opCtx(
-                harnessHelper->newOperationContext());
-            {
-                WriteUnitOfWork uow(opCtx.get());
-
-                ASSERT_OK(sorted->insert(opCtx.get(), key1, loc1, false));
-                ASSERT_OK(sorted->insert(opCtx.get(), key2, loc2, false));
-
-                uow.commit();
-            }
-        }
-
-        {
-            const ServiceContext::UniqueOperationContext t1(harnessHelper->newOperationContext());
-            const auto client2 = harnessHelper->serviceContext()->makeClient("c2");
-            const auto t2 = harnessHelper->newOperationContext(client2.get());
-
             const std::unique_ptr<WriteUnitOfWork> w1(new WriteUnitOfWork(t1.get()));
-            const std::unique_ptr<WriteUnitOfWork> w2(new WriteUnitOfWork(t2.get()));
-
-            ASSERT_OK(sorted->insert(t1.get(), key3, loc3, false));
-            ASSERT_OK(sorted->insert(t2.get(), key4, loc4, false));
-
-            // this should throw
-            ASSERT_THROWS(sorted->insert(t2.get(), key3, loc5, false), WriteConflictException);
-
-            w1->commit();  // this should succeed
-        }
-
-        {
-            const ServiceContext::UniqueOperationContext t1(harnessHelper->newOperationContext());
-            const auto client2 = harnessHelper->serviceContext()->makeClient("c2");
-            const auto t2 = harnessHelper->newOperationContext(client2.get());
-
-            const std::unique_ptr<WriteUnitOfWork> w2(new WriteUnitOfWork(t2.get()));
-            // ensure we start w2 transaction
-            ASSERT_OK(sorted->insert(t2.get(), key4, loc4, false));
 
             {
-                const std::unique_ptr<WriteUnitOfWork> w1(new WriteUnitOfWork(t1.get()));
-
-                {
-                    WriteUnitOfWork w(t1.get());
-                    ASSERT_OK(sorted->insert(t1.get(), key5, loc3, false));
-                    w.commit();
-                }
-                w1->commit();
+                WriteUnitOfWork w(t1.get());
+                ASSERT_OK(sorted->insert(t1.get(), makeKeyString(sorted.get(), key5, loc3), false));
+                w.commit();
             }
-
-            // this should throw
-            ASSERT_THROWS(sorted->insert(t2.get(), key5, loc3, false), WriteConflictException);
+            w1->commit();
         }
-    }
 
-    void testSeekExactRemoveNext(bool forward, bool unique) {
-        std::unique_ptr<SortedDataInterfaceHarnessHelper> harnessHelper =
-            stdx::make_unique<RocksIndexHarness>();
-        auto opCtx = harnessHelper->newOperationContext();
-        auto sorted = harnessHelper->newSortedDataInterface(unique, false,
-                {{key1, loc1}, {key2, loc1}, {key3, loc1}});
-        auto cursor = sorted->newCursor(opCtx.get(), forward);
-        ASSERT_EQ(cursor->seekExact(key2), IndexKeyEntry(key2, loc1));
-        cursor->save();
-        removeFromIndex(opCtx, sorted, {{key2, loc1}});
-        cursor->restore();
-        ASSERT_EQ(cursor->next(), forward ? IndexKeyEntry(key3, loc1) : IndexKeyEntry(key1, loc1));
-        ASSERT_EQ(cursor->next(), boost::none);
+        // this should throw
+        ASSERT_THROWS(sorted->insert(t2.get(), makeKeyString(sorted.get(), key5, loc3), false),
+                      WriteConflictException);
     }
+}
 
-    TEST(RocksIndexTest, SeekExactRemoveNext_Forward_Unique) {
-        testSeekExactRemoveNext(true, true);
-    }
+void testSeekExactRemoveNext(bool forward, bool unique) {
+    std::unique_ptr<SortedDataInterfaceHarnessHelper> harnessHelper =
+        std::make_unique<RocksIndexHarness>();
+    auto opCtx = harnessHelper->newOperationContext();
+    auto sorted = harnessHelper->newSortedDataInterface(
+        unique, false, {{key1, loc1}, {key2, loc1}, {key3, loc1}});
+    auto cursor = sorted->newCursor(opCtx.get(), forward);
+    ASSERT_EQ(cursor->seekExact(makeKeyString(sorted.get(), key2)), IndexKeyEntry(key2, loc1));
+    cursor->save();
+    removeFromIndex(opCtx, sorted, {{key2, loc1}});
+    cursor->restore();
+    ASSERT_EQ(cursor->next(), forward ? IndexKeyEntry(key3, loc1) : IndexKeyEntry(key1, loc1));
 
-    TEST(RocksIndexTest, SeekExactRemoveNext_Forward_Standard) {
-        testSeekExactRemoveNext(true, false);
-    }
+    ASSERT_EQ(cursor->next(), boost::none);
+}
 
-    TEST(RocksIndexTest, SeekExactRemoveNext_Reverse_Unique) {
-        testSeekExactRemoveNext(false, true);
-    }
+TEST(RocksIndexTest, SeekExactRemoveNext_Forward_Unique) {
+    testSeekExactRemoveNext(true, true);
+}
 
-    TEST(RocksIndexTest, SeekExactRemoveNext_Reverse_Standard) {
-        testSeekExactRemoveNext(false, false);
-    }
-} // namespace
-} // namespace mongo
+TEST(RocksIndexTest, SeekExactRemoveNext_Forward_Standard) {
+    testSeekExactRemoveNext(true, false);
+}
+
+TEST(RocksIndexTest, SeekExactRemoveNext_Reverse_Unique) {
+    testSeekExactRemoveNext(false, true);
+}
+
+TEST(RocksIndexTest, SeekExactRemoveNext_Reverse_Standard) {
+    testSeekExactRemoveNext(false, false);
+}
+}  // namespace
+}  // namespace mongo

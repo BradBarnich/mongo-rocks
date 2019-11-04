@@ -84,8 +84,15 @@ env.CppUnitTest(
            ],
    LIBDEPS=[
         'storage_rocks_mock',
+        '$BUILD_DIR/mongo/db/storage/durable_catalog_impl',
         '$BUILD_DIR/mongo/db/storage/sorted_data_interface_test_harness'
-        ]
+        ],
+    LIBDEPS_PRIVATE=[
+        '$BUILD_DIR/mongo/db/auth/authmocks',
+        '$BUILD_DIR/mongo/db/repl/replmocks',
+        '$BUILD_DIR/mongo/db/repl/repl_coordinator_interface',
+        '$BUILD_DIR/mongo/db/service_context_test_fixture',
+    ],
    )
 
 
@@ -95,8 +102,15 @@ env.CppUnitTest(
            ],
    LIBDEPS=[
         'storage_rocks_mock',
+        '$BUILD_DIR/mongo/db/storage/durable_catalog_impl',
         '$BUILD_DIR/mongo/db/storage/record_store_test_harness'
-        ]
+        ],
+    LIBDEPS_PRIVATE=[
+        '$BUILD_DIR/mongo/db/auth/authmocks',
+        '$BUILD_DIR/mongo/db/repl/replmocks',
+        '$BUILD_DIR/mongo/db/repl/repl_coordinator_interface',
+        '$BUILD_DIR/mongo/db/service_context_test_fixture',
+    ],
    )
 
 env.CppUnitTest(
@@ -107,6 +121,12 @@ env.CppUnitTest(
         'storage_rocks_mock',
         '$BUILD_DIR/mongo/db/storage/kv/kv_engine_test_harness',
         '$BUILD_DIR/mongo/db/storage/storage_options'
-        ]
+        ],
+    LIBDEPS_PRIVATE=[
+        '$BUILD_DIR/mongo/db/auth/authmocks',
+        '$BUILD_DIR/mongo/db/repl/replmocks',
+        '$BUILD_DIR/mongo/db/repl/repl_coordinator_interface',
+        '$BUILD_DIR/mongo/db/service_context_test_fixture',
+    ],
    )
 

@@ -77,13 +77,13 @@ public:
         return newNonCappedRecordStore("foo.bar");
     }
     std::unique_ptr<RecordStore> newNonCappedRecordStore(const std::string& ns) {
-        return stdx::make_unique<RocksRecordStore>(ns,
-                                                   "1",
-                                                   _db.get(),
-                                                   _counterManager.get(),
-                                                   _durabilityManager.get(),
-                                                   _compactionScheduler.get(),
-                                                   "prefix");
+        return std::make_unique<RocksRecordStore>(ns,
+                                                  "1",
+                                                  _db.get(),
+                                                  _counterManager.get(),
+                                                  _durabilityManager.get(),
+                                                  _compactionScheduler.get(),
+                                                  "prefix");
     }
 
     std::unique_ptr<RecordStore> newCappedRecordStore(int64_t cappedMaxSize,
@@ -94,26 +94,26 @@ public:
     std::unique_ptr<RecordStore> newCappedRecordStore(const std::string& ns,
                                                       int64_t cappedMaxSize,
                                                       int64_t cappedMaxDocs) {
-        return stdx::make_unique<RocksRecordStore>(ns,
-                                                   "1",
-                                                   _db.get(),
-                                                   _counterManager.get(),
-                                                   _durabilityManager.get(),
-                                                   _compactionScheduler.get(),
-                                                   "prefix",
-                                                   true,
-                                                   cappedMaxSize,
-                                                   cappedMaxDocs);
+        return std::make_unique<RocksRecordStore>(ns,
+                                                  "1",
+                                                  _db.get(),
+                                                  _counterManager.get(),
+                                                  _durabilityManager.get(),
+                                                  _compactionScheduler.get(),
+                                                  "prefix",
+                                                  true,
+                                                  cappedMaxSize,
+                                                  cappedMaxDocs);
     }
 
     std::unique_ptr<RecoveryUnit> newRecoveryUnit() final {
-        return stdx::make_unique<RocksRecoveryUnit>(&_transactionEngine,
-                                                    &_snapshotManager,
-                                                    _db.get(),
-                                                    _counterManager.get(),
-                                                    nullptr,
-                                                    _durabilityManager.get(),
-                                                    true);
+        return std::make_unique<RocksRecoveryUnit>(&_transactionEngine,
+                                                   &_snapshotManager,
+                                                   _db.get(),
+                                                   _counterManager.get(),
+                                                   nullptr,
+                                                   _durabilityManager.get(),
+                                                   true);
     }
 
     bool supportsDocLocking() final {
@@ -131,18 +131,19 @@ private:
     std::unique_ptr<RocksCompactionScheduler> _compactionScheduler;
 };
 
-std::unique_ptr<HarnessHelper> makeHarnessHelper() {
-    return stdx::make_unique<RocksRecordStoreHarnessHelper>();
+std::unique_ptr<RecordStoreHarnessHelper> makeHarnessHelper() {
+    return std::make_unique<RocksRecordStoreHarnessHelper>();
 }
 
 MONGO_INITIALIZER(RegisterHarnessFactory)(InitializerContext* const) {
-    mongo::registerHarnessHelperFactory(makeHarnessHelper);
+    mongo::registerRecordStoreHarnessHelperFactory(makeHarnessHelper);
     return Status::OK();
 }
 
 TEST(RocksRecordStoreTest, Isolation1) {
     const auto harnessHelper(newRecordStoreHarnessHelper());
     unique_ptr<RecordStore> rs(harnessHelper->newNonCappedRecordStore());
+
 
     RecordId id1;
     RecordId id2;

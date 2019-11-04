@@ -267,6 +267,7 @@ RocksRecoveryUnit::~RocksRecoveryUnit() {
 void RocksRecoveryUnit::beginUnitOfWork(OperationContext* opCtx) {
     invariant(!_areWriteUnitOfWorksBanned);
     _opCtx = opCtx;
+    _setState(_isActive() ? State::kActive : State::kInactiveInUnitOfWork);
 }
 
 void RocksRecoveryUnit::commitUnitOfWork() {
@@ -276,20 +277,16 @@ void RocksRecoveryUnit::commitUnitOfWork() {
     // be boost::none and we'll set the commit time to that.
     auto commitTime = _commitTimestamp.isNull() ? _lastTimestampSet : _commitTimestamp;
 
-    // if(!commitTime && getGlobalReplSettings().usingReplSets()) {
-    //     commitTime = LogicalClock::get(_opCtx)->getClusterTime().asTimestamp();
-    // }
+    if (!commitTime && getGlobalReplSettings().usingReplSets()) {
+        commitTime = LogicalClock::get(_opCtx)->reserveTicks(1).asTimestamp();
+    }
+
+    if (!commitTime) {
+    }
 
     _commit(commitTime);
-
-    try {
-        for (Changes::const_iterator it = _changes.begin(), end = _changes.end(); it != end; ++it) {
-            (*it)->commit(commitTime);
-        }
-        _changes.clear();
-    } catch (...) {
-        std::terminate();
-    }
+    commitRegisteredChanges(commitTime);
+    _setState(State::kInactive);
 
     _lastTimestampSet = boost::none;
     _releaseSnapshot();
@@ -300,7 +297,7 @@ void RocksRecoveryUnit::abortUnitOfWork() {
     _abort();
 }
 
-bool RocksRecoveryUnit::waitUntilDurable() {
+bool RocksRecoveryUnit::waitUntilDurable(OperationContext* opCtx) {
     _durabilityManager->waitUntilDurable(false);
     return true;
 }
@@ -311,6 +308,8 @@ void RocksRecoveryUnit::abandonSnapshot() {
     _timestamps.clear();
     _releaseSnapshot();
     _areWriteUnitOfWorksBanned = false;
+
+    _setState(State::kInactive);
 }
 
 void RocksRecoveryUnit::Put(const rocksdb::Slice& key, const rocksdb::Slice& value) {
@@ -385,10 +384,6 @@ void RocksRecoveryUnit::setOplogReadTill(const RecordId& record) {
     _oplogReadTill = record;
 }
 
-void RocksRecoveryUnit::registerChange(Change* change) {
-    _changes.push_back(change);
-}
-
 Status RocksRecoveryUnit::obtainMajorityCommittedSnapshot() {
     invariant(_timestampReadSource == ReadSource::kMajorityCommitted);
 
@@ -411,6 +406,7 @@ boost::optional<Timestamp> RocksRecoveryUnit::getPointInTimeReadTimestamp() {
     switch (_timestampReadSource) {
         case ReadSource::kUnset:
         case ReadSource::kNoTimestamp:
+        case ReadSource::kCheckpoint:
             return boost::none;
         case ReadSource::kMajorityCommitted:
             // This ReadSource depends on a previous call to obtainMajorityCommittedSnapshot() and
@@ -502,24 +498,15 @@ void RocksRecoveryUnit::_commit(boost::optional<Timestamp> commitTime) {
     _timestamps.clear();
 
     // this started causing a crash
-    _db->Flush(rocksdb::FlushOptions());
-    rocksdb::CompactRangeOptions options;
-    _db->CompactRange(options, nullptr, nullptr);
+    // _db->Flush(rocksdb::FlushOptions());
+    // rocksdb::CompactRangeOptions options;
+    // _db->CompactRange(options, nullptr, nullptr);
 }
 
 void RocksRecoveryUnit::_abort() {
-    try {
-        for (Changes::const_reverse_iterator it = _changes.rbegin(), end = _changes.rend();
-             it != end;
-             ++it) {
-            Change* change = *it;
-            LOG(2) << "CUSTOM ROLLBACK " << redact(demangleName(typeid(*change)));
-            change->rollback();
-        }
-        _changes.clear();
-    } catch (...) {
-        std::terminate();
-    }
+    _setState(State::kAborting);
+    abortRegisteredChanges();
+    _setState(State::kInactive);
 
     _deltaCounters.clear();
     _writeBatch.Clear();

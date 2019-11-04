@@ -60,14 +60,12 @@ public:
                    const IndexDescriptor* desc,
                    const BSONObj& config);
 
-    virtual StatusWith<SpecialFormatInserted> insert(OperationContext* opCtx,
-                                                     const BSONObj& key,
-                                                     const RecordId& id,
-                                                     bool dupsAllowed);
+    virtual Status insert(OperationContext* opCtx,
+                          const KeyString::Value& keyString,
+                          bool dupsAllowed);
 
     virtual void unindex(OperationContext* opCtx,
-                         const BSONObj& key,
-                         const RecordId& id,
+                         const KeyString::Value& keyString,
                          bool dupsAllowed);
 
     virtual void fullValidate(OperationContext* opCtx,
@@ -82,7 +80,7 @@ public:
         return true;
     }
 
-    virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key);
+    virtual Status dupKeyCheck(OperationContext* opCtx, const KeyString::Value& key);
 
     virtual bool isEmpty(OperationContext* opCtx);
 
@@ -90,19 +88,11 @@ public:
 
     virtual Status initAsEmpty(OperationContext* opCtx);
 
-    virtual bool isDup(OperationContext* opCtx, const BSONObj& key);
+    virtual bool isDup(OperationContext* opCtx, const KeyString::Value& key);
 
     static void generateConfig(BSONObjBuilder* configBuilder,
                                int formatVersion,
                                const IndexDescriptor* desc);
-
-    Ordering ordering() const {
-        return _ordering;
-    }
-
-    KeyString::Version keyStringVersion() const {
-        return _keyStringVersion;
-    }
 
     const NamespaceString& collectionNamespace() const {
         return _collectionNamespace;
@@ -128,26 +118,21 @@ public:
     virtual bool isTimestampSafeUniqueIdx() const = 0;
 
 protected:
-    static std::string _makePrefixedKey(const std::string& prefix, const KeyString& encodedKey);
+    static std::string _makePrefixedKey(const std::string& prefix,
+                                        const KeyString::Value& encodedKey);
 
-    virtual StatusWith<SpecialFormatInserted> _insert(OperationContext* opCtx,
-                                                      const BSONObj& key,
-                                                      const RecordId& id,
-                                                      bool dupsAllowed) = 0;
+    virtual Status _insert(OperationContext* opCtx,
+                           const KeyString::Value& keyString,
+                           bool dupsAllowed) = 0;
 
     virtual void _unindex(OperationContext* opCtx,
-                          const BSONObj& key,
-                          const RecordId& id,
+                          const KeyString::Value& keyString,
                           bool dupsAllowed) = 0;
 
     rocksdb::DB* _db;  // not owned
 
     std::string _ident;
 
-    const Ordering _ordering;
-    // The keystring and data format version are effectively const after the WiredTigerIndex
-    // instance is constructed.
-    KeyString::Version _keyStringVersion;
     int _dataFormatVersion;
 
     const NamespaceString _collectionNamespace;
@@ -185,43 +170,37 @@ public:
 
     bool isTimestampSafeUniqueIdx() const override;
 
-    bool isDup(OperationContext* opCtx, const BSONObj& key) override;
+    bool isDup(OperationContext* opCtx, const KeyString::Value&) override;
 
-    StatusWith<SpecialFormatInserted> _insert(OperationContext* opCtx,
-                                                     const BSONObj& key,
-                                                     const RecordId& id,
-                                                     bool dupsAllowed) override;
-    
-    StatusWith<SpecialFormatInserted> _insertTimestampUnsafe(OperationContext* opCtx,
-                                                             const BSONObj& key,
-                                                             const RecordId& id,
-                                                             bool dupsAllowed);
+    Status _insert(OperationContext* opCtx,
+                   const KeyString::Value& keyString,
+                   bool dupsAllowed) override;
 
-    StatusWith<SpecialFormatInserted> _insertTimestampSafe(OperationContext* opCtx,
-                                                           const BSONObj& key,
-                                                           const RecordId& id,
-                                                           bool dupsAllowed);
+    Status _insertTimestampUnsafe(OperationContext* opCtx,
+                                  const KeyString::Value& keyString,
+                                  bool dupsAllowed);
+
+    Status _insertTimestampSafe(OperationContext* opCtx,
+                                const KeyString::Value& keyString,
+                                bool dupsAllowed);
 
     void _unindex(OperationContext* opCtx,
-                         const BSONObj& key,
-                         const RecordId& id,
-                         bool dupsAllowed) override;
+                  const KeyString::Value& keyString,
+                  bool dupsAllowed) override;
 
     void _unindexTimestampUnsafe(OperationContext* opCtx,
-                                 const BSONObj& key,
-                                 const RecordId& id,
+                                 const KeyString::Value& keyString,
                                  bool dupsAllowed);
 
     void _unindexTimestampSafe(OperationContext* opCtx,
-                               const BSONObj& key,
-                               const RecordId& id,
+                               const KeyString::Value& keyString,
                                bool dupsAllowed);
 
 private:
     /**
      * If this returns true, the iterator will be positioned on the first matching the input 'key'.
      */
-    bool _keyExists(OperationContext* opCtx, RocksIterator* it, const KeyString& key);
+    bool _keyExists(OperationContext* opCtx, RocksIterator* it, const rocksdb::Slice& key);
 
     const bool _partial;
 };
@@ -247,14 +226,8 @@ public:
         return false;
     }
 
-    StatusWith<SpecialFormatInserted> _insert(OperationContext* opCtx,
-                                                     const BSONObj& key,
-                                                     const RecordId& id,
-                                                     bool dupsAllowed);
-    void _unindex(OperationContext* opCtx,
-                         const BSONObj& key,
-                         const RecordId& id,
-                         bool dupsAllowed);
+    Status _insert(OperationContext* opCtx, const KeyString::Value& keyString, bool dupsAllowed);
+    void _unindex(OperationContext* opCtx, const KeyString::Value& keyString, bool dupsAllowed);
 
     void enableSingleDelete() {
         useSingleDelete = true;
