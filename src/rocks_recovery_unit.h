@@ -171,22 +171,18 @@ public:
 
     void beginUnitOfWork(OperationContext* opCtx);
     // void prepareUnitOfWork() override;
-    void commitUnitOfWork() override;
-    void abortUnitOfWork() override;
+
 
     bool waitUntilDurable(OperationContext* opCtx) override;
 
     // bool waitUntilUnjournaledWritesDurable(OperationContext* opCtx,
     //                                        bool stableCheckpoint = true) override;
 
-    void abandonSnapshot();
     // void preallocateSnapshot() override;
 
     Status obtainMajorityCommittedSnapshot() override;
 
     boost::optional<Timestamp> getPointInTimeReadTimestamp() override;
-
-    SnapshotId getSnapshotId() const override;
 
     Status setTimestamp(Timestamp timestamp) override;
 
@@ -224,8 +220,6 @@ public:
     // local api
 
     void Put(const rocksdb::Slice& key, const rocksdb::Slice& value);
-
-    void Put(const rocksdb::Slice& key, const rocksdb::Slice& value, const Timestamp timestamp);
 
     void Delete(const rocksdb::Slice& key);
 
@@ -302,6 +296,11 @@ public:
     std::string getReadTimestamp();
 
 private:
+    void doCommitUnitOfWork() override;
+    void doAbortUnitOfWork() override;
+
+    void doAbandonSnapshot() override;
+
     void _releaseSnapshot();
 
     void _commit(boost::optional<Timestamp> commitTime);
@@ -314,6 +313,7 @@ private:
     RocksCompactionScheduler* _compactionScheduler;  // not owned
     RocksDurabilityManager* _durabilityManager;      // not owned
     OperationContext* _opCtx;                        // not owned
+    bool _isTimestamped = false;
 
     const bool _durable;
 
@@ -330,8 +330,6 @@ private:
 
     std::unique_ptr<Timer> _timer;
     CounterMap _deltaCounters;
-
-    uint64_t _mySnapshotId;
 
     RecordId _oplogReadTill;
 

@@ -1022,11 +1022,13 @@ Status RocksUniqueIndex::_insertTimestampUnsafe(OperationContext* opCtx,
     const RecordId id = KeyString::decodeRecordIdAtEnd(keyString.getBuffer(), keyString.getSize());
     invariant(id.isValid());
 
-    std::string prefixedKey(_makePrefixedKey(_prefix, keyString));
-
     auto sizeWithoutRecordId =
         KeyString::sizeWithoutRecordIdAtEnd(keyString.getBuffer(), keyString.getSize());
-    rocksdb::Slice keySlice(prefixedKey.data(), sizeWithoutRecordId + _prefix.size());
+
+    std::string prefixedKey(_makePrefixedKey(_prefix, keyString).data(),
+                            sizeWithoutRecordId + _prefix.size());
+
+    rocksdb::Slice keySlice(prefixedKey);
 
     KeyString::Builder value(getKeyStringVersion(), id);
     const KeyString::TypeBits typeBits = keyString.getTypeBits();
@@ -1117,7 +1119,7 @@ Status RocksUniqueIndex::_insertTimestampSafe(OperationContext* opCtx,
             KeyString::sizeWithoutRecordIdAtEnd(keyString.getBuffer(), keyString.getSize());
         rocksdb::Slice keySlice(keyString.getBuffer(), sizeWithoutRecordId);
 
-        std::string prefixedKey(_makePrefixedKey(_prefix, keyString),
+        std::string prefixedKey(_makePrefixedKey(_prefix, keyString).data(),
                                 _prefix.size() + sizeWithoutRecordId);
         if (!ru->transaction()->registerWrite(prefixedKey)) {
             throw WriteConflictException();
@@ -1167,8 +1169,9 @@ void RocksUniqueIndex::_unindexTimestampUnsafe(OperationContext* opCtx,
 
     auto sizeWithoutRecordId =
         KeyString::sizeWithoutRecordIdAtEnd(keyString.getBuffer(), keyString.getSize());
-    std::string prefixedKey(_makePrefixedKey(_prefix, keyString));
-    rocksdb::Slice keySlice(prefixedKey.data(), sizeWithoutRecordId + _prefix.size());
+    std::string prefixedKey(_makePrefixedKey(_prefix, keyString).data(),
+                            sizeWithoutRecordId + _prefix.size());
+    rocksdb::Slice keySlice(prefixedKey);
 
     auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
     // We can't let two threads unindex the same key

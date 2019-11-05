@@ -7,6 +7,9 @@ env.Library(
     source= [
         'src/rocks_global_options.cpp',
         ],
+    LIBDEPS_PRIVATE= [
+        '$BUILD_DIR/mongo/util/options_parser/options_parser',
+        ],
     )
 
 baselibs = ["rocksdb","zstd","lz4","z"];
@@ -34,6 +37,7 @@ env.Library(
         '$BUILD_DIR/mongo/db/concurrency/lock_manager',
         '$BUILD_DIR/mongo/db/concurrency/write_conflict_exception',
         '$BUILD_DIR/mongo/db/index/index_descriptor',
+        '$BUILD_DIR/mongo/db/server_options_core',
         '$BUILD_DIR/mongo/db/storage/bson_collection_catalog_entry',
         '$BUILD_DIR/mongo/db/storage/index_entry_comparison',
         '$BUILD_DIR/mongo/db/storage/journal_listener',
@@ -44,6 +48,10 @@ env.Library(
         '$BUILD_DIR/mongo/util/processinfo',
         '$BUILD_DIR/third_party/shim_snappy',
         'storage_rocks_global_options',
+        ],
+    LIBDEPS_PRIVATE= [
+        '$BUILD_DIR/mongo/util/options_parser/options_parser',
+        '$BUILD_DIR/mongo/util/debugger',
         ],
     SYSLIBDEPS=baselibs
     )
@@ -61,6 +69,9 @@ env.Library(
     LIBDEPS= [
         'storage_rocks_base',
         '$BUILD_DIR/mongo/db/storage/kv/kv_prefix'
+        ],
+    LIBDEPS_PRIVATE= [
+        '$BUILD_DIR/mongo/util/options_parser/options_parser',
         ],
     LIBDEPS_DEPENDENTS=['$BUILD_DIR/mongo/db/serveronly']
     )

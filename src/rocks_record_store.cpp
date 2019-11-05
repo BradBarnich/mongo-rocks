@@ -732,8 +732,7 @@ StatusWith<RecordId> RocksRecordStore::insertRecord(OperationContext* opCtx,
 
     // No need to register the write here, since we just allocated a new RecordId so no other
     // transaction can access this key before we commit
-    // log() << "insert: " << loc << ", timestamp: " << timestamp;
-    ru->Put(_makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len), timestamp);
+    ru->Put(_makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len));
     if (_isOplog) {
         _oplogKeyTracker->insertKey(ru, loc, len);
     }

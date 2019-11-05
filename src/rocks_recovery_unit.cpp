@@ -58,10 +58,6 @@
 
 namespace mongo {
 namespace {
-// SnapshotIds need to be globally unique, as they are used in a WorkingSetMember to
-// determine if documents changed, but a different recovery unit may be used across a getMore,
-// so there is a chance the snapshot ID will be reused.
-AtomicWord<uint64_t> nextSnapshotId{1};
 
 logger::LogSeverity kSlowTransactionSeverity = logger::LogSeverity::Debug(1);
 
@@ -249,8 +245,7 @@ RocksRecoveryUnit::RocksRecoveryUnit(RocksTransactionEngine* transactionEngine,
       _transaction(transactionEngine),
       _writeBatch(TimestampComparator(), 0, true, 0, sizeof(uint64_t)),
       _snapshot(nullptr),
-      _preparedSnapshot(nullptr),
-      _mySnapshotId(nextSnapshotId.fetchAndAdd(1)) {
+      _preparedSnapshot(nullptr) {
     RocksRecoveryUnit::_totalLiveRecoveryUnits.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -268,21 +263,17 @@ void RocksRecoveryUnit::beginUnitOfWork(OperationContext* opCtx) {
     invariant(!_areWriteUnitOfWorksBanned);
     _opCtx = opCtx;
     _setState(_isActive() ? State::kActive : State::kInactiveInUnitOfWork);
+    log() << "begin uow";
 }
 
-void RocksRecoveryUnit::commitUnitOfWork() {
+void RocksRecoveryUnit::doCommitUnitOfWork() {
+    log() << "commit uow";
+    invariant(_inUnitOfWork(), toString(_getState()));
 
     // Since we cannot have both a _lastTimestampSet and a _commitTimestamp, we set the
     // commit time as whichever is non-empty. If both are empty, then _lastTimestampSet will
     // be boost::none and we'll set the commit time to that.
     auto commitTime = _commitTimestamp.isNull() ? _lastTimestampSet : _commitTimestamp;
-
-    if (!commitTime && getGlobalReplSettings().usingReplSets()) {
-        commitTime = LogicalClock::get(_opCtx)->reserveTicks(1).asTimestamp();
-    }
-
-    if (!commitTime) {
-    }
 
     _commit(commitTime);
     commitRegisteredChanges(commitTime);
@@ -293,7 +284,9 @@ void RocksRecoveryUnit::commitUnitOfWork() {
     _opCtx = nullptr;
 }
 
-void RocksRecoveryUnit::abortUnitOfWork() {
+void RocksRecoveryUnit::doAbortUnitOfWork() {
+    log() << "abort uow";
+    invariant(_inUnitOfWork(), toString(_getState()));
     _abort();
 }
 
@@ -302,7 +295,8 @@ bool RocksRecoveryUnit::waitUntilDurable(OperationContext* opCtx) {
     return true;
 }
 
-void RocksRecoveryUnit::abandonSnapshot() {
+void RocksRecoveryUnit::doAbandonSnapshot() {
+    invariant(!_inUnitOfWork(), toString(_getState()));
     _deltaCounters.clear();
     _writeBatch.Clear();
     _timestamps.clear();
@@ -313,28 +307,47 @@ void RocksRecoveryUnit::abandonSnapshot() {
 }
 
 void RocksRecoveryUnit::Put(const rocksdb::Slice& key, const rocksdb::Slice& value) {
-    log() << "put: " << key.ToString(true)
-          << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
-    // if (_lastTimestampSet) {
-    //     log() << "commit: " << _lastTimestampSet;
-    // }
-    invariantRocksOK(_writeBatch.Put(key, value));
-    _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
-}
-
-void RocksRecoveryUnit::Put(const rocksdb::Slice& key,
-                            const rocksdb::Slice& value,
-                            const Timestamp timestamp) {
 
     invariantRocksOK(_writeBatch.Put(key, value));
 
-    if (timestamp != Timestamp(0, 0)) {
-        log() << "put: " << key.ToString(true) << ", timestamp: " << timestamp;
-        _timestamps.push_back(encodeTimestamp(timestamp.asULL()));
-    } else {
-        log() << "put: " << key.ToString(true)
-              << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
+    if (!_commitTimestamp.isNull()) {
+        log() << "put: " << key.ToString(true) << ", timestamp(commit): " << _commitTimestamp;
+    } else if (_lastTimestampSet /*&& _lastTimestampSet != Timestamp(1, 1)*/) {
+        log() << "put: " << key.ToString(true) << ", timestamp: " << _lastTimestampSet;
         _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
+    } else {
+        log() << "put: " << key.ToString(true) << ", timestamp(to be set at commit) ";
+        _timestamps.push_back(std::string());
+
+        // rocksdb::ReadOptions options;
+        // options.snapshot = snapshot();
+        // std::unique_ptr<rocksdb::Iterator> iterator(_db->NewIterator(options));
+        // std::string keyWithTimestamp(key.data(), key.size());
+        // keyWithTimestamp.append(encodeTimestamp(ULLONG_MAX));
+        // iterator->Seek(keyWithTimestamp);
+
+        // if (iterator->Valid() && iterator->key().starts_with(key) &&
+        //     iterator->key().size() == key.size() + sizeof(uint64_t)) {
+
+        //     std::string timestampString(iterator->key().data() + key.size(), sizeof(uint64_t));
+
+        //     uint64_t ts_ull;
+        //     ts_ull =
+        //         endian::bigToNative(*reinterpret_cast<const uint64_t*>(timestampString.data()));
+
+        //     log() << "put: " << key.ToString(true)
+        //           << " without timestamp, using existing: " << Timestamp(ts_ull);
+
+
+        //     _timestamps.push_back(timestampString);
+        //     // log() << "removing existing key at timestamp: " << key.ToString(true) <<
+        //     // existingTimestamp;
+        //     // iterator->Next();
+        // } else {
+        //     log() << "put: " << key.ToString(true)
+        //           << " without timestamp, doesn't exist: " << Timestamp();
+        //     _timestamps.push_back(encodeTimestamp(Timestamp().asULL()));
+        // }
     }
 }
 
@@ -342,7 +355,10 @@ void RocksRecoveryUnit::Delete(const rocksdb::Slice& key) {
     log() << "delete: " << key.ToString(true)
           << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
     invariantRocksOK(_writeBatch.Delete(key));
-    _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
+
+    if (_commitTimestamp.isNull()) {
+        _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
+    }
 }
 
 void RocksRecoveryUnit::DeleteRange(const rocksdb::Slice& begin_key,
@@ -350,14 +366,20 @@ void RocksRecoveryUnit::DeleteRange(const rocksdb::Slice& begin_key,
     // log() << "delete range: " << begin_key.ToString(true) << ", timestamp: " <<
     // _lastTimestampSet.value_or(Timestamp());
     invariantRocksOK(_writeBatch.DeleteRange(begin_key, end_key));
-    _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
+
+    if (_commitTimestamp.isNull()) {
+        _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
+    }
 }
 
 void RocksRecoveryUnit::SingleDelete(const rocksdb::Slice& key) {
     // log() << "singledelete: " << key.ToString(true)
     //       << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
     invariantRocksOK(_writeBatch.SingleDelete(key));
-    _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
+
+    if (_commitTimestamp.isNull()) {
+        _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
+    };
 }
 
 void RocksRecoveryUnit::TruncatePrefix(std::string prefix) {
@@ -372,7 +394,10 @@ void RocksRecoveryUnit::TruncatePrefix(std::string prefix) {
     // prefixRange.limit.ToString(true);
 
     invariantRocksOK(_writeBatch.DeleteRange(prefixRange.start, prefixRange.limit));
-    _timestamps.push_back(encodeTimestamp(UINT64_MAX));
+
+    if (_commitTimestamp.isNull()) {
+        _timestamps.push_back(encodeTimestamp(UINT64_MAX));
+    }
 
     // return _db->DeleteRange(
     //     writeOptions,
@@ -431,17 +456,14 @@ boost::optional<Timestamp> RocksRecoveryUnit::getPointInTimeReadTimestamp() {
     }
 }
 
-SnapshotId RocksRecoveryUnit::getSnapshotId() const {
-    return SnapshotId(_mySnapshotId);
-}
-
 void RocksRecoveryUnit::_releaseSnapshot() {
     if (_timer) {
         const int transactionTime = _timer->millis();
         _timer.reset();
         if (transactionTime >= serverGlobalParams.slowMS) {
-            LOG(kSlowTransactionSeverity) << "Slow transaction. Lifetime of SnapshotId "
-                                          << _mySnapshotId << " was " << transactionTime << " ms";
+            LOG(kSlowTransactionSeverity)
+                << "Slow transaction. Lifetime of SnapshotId " << getSnapshotId().toNumber()
+                << " was " << transactionTime << " ms";
         }
     }
 
@@ -452,31 +474,39 @@ void RocksRecoveryUnit::_releaseSnapshot() {
     }
     _snapshotHolder.reset();
     _readFromMajorityCommittedSnapshot.reset();
-
-    _mySnapshotId = nextSnapshotId.fetchAndAdd(1);
 }
 
 void RocksRecoveryUnit::_commit(boost::optional<Timestamp> commitTime) {
-    rocksdb::WriteBatch* wb = _writeBatch.GetWriteBatch();
-
-    std::vector<rocksdb::Slice> timestampSlices;
-
-    auto zeroTs = encodeTimestamp(0ULL);
-
-    for (const auto& ts : _timestamps) {
-        if (commitTime && ts.compare(zeroTs) == 0) {
-            timestampSlices.emplace_back(encodeTimestamp(commitTime->asULL()));
-            log() << "commit operation at: " << commitTime;
-        } else {
-            timestampSlices.emplace_back(ts);
-
-            uint64_t ts_ull;
-            ts_ull = endian::bigToNative(*reinterpret_cast<const uint64_t*>(ts.data()));
-            log() << "commit operation at: " << Timestamp(ts_ull);
-        }
+    if (_mustBeTimestamped) {
+        invariant(_isTimestamped);
     }
 
-    wb->AssignTimestamps(timestampSlices);
+    rocksdb::WriteBatch* wb = _writeBatch.GetWriteBatch();
+
+    auto commitTimeString = encodeTimestamp(_commitTimestamp.asULL());
+
+    if (_commitTimestamp.isNull()) {
+        std::vector<rocksdb::Slice> timestampSlices;
+
+        auto zeroTs = encodeTimestamp(0ULL);
+
+        for (const auto& ts : _timestamps) {
+            if (ts.size() == 0) {
+                if (commitTime) {
+                    log() << "commit: setting unspecified timestamp to " << commitTime;
+                    timestampSlices.emplace_back(commitTimeString);
+                } else {
+                    timestampSlices.emplace_back(zeroTs);
+                }
+            } else {
+                timestampSlices.emplace_back(ts);
+            }
+        }
+        wb->AssignTimestamps(timestampSlices);
+    } else {
+        wb->AssignTimestamp(commitTimeString);
+    }
+
     for (auto pair : _deltaCounters) {
         auto& counter = pair.second;
         counter._value->fetch_add(counter._delta);
@@ -496,6 +526,7 @@ void RocksRecoveryUnit::_commit(boost::optional<Timestamp> commitTime) {
     _deltaCounters.clear();
     _writeBatch.Clear();
     _timestamps.clear();
+    _isTimestamped = false;
 
     // this started causing a crash
     // _db->Flush(rocksdb::FlushOptions());
@@ -564,7 +595,7 @@ rocksdb::Status RocksRecoveryUnit::Get(const rocksdb::Slice& key, std::string* v
     std::string timestamp = getReadTimestamp();
     rocksdb::Slice readTimestamp(timestamp);
     uint64_t ts_ull = endian::bigToNative(*reinterpret_cast<const uint64_t*>(timestamp.data()));
-    log() << "Get at snapshot " << options.snapshot->GetSequenceNumber()
+    log() << "Get " << key.ToString(true) << " snapshot " << options.snapshot->GetSequenceNumber()
           << " at ts: " << Timestamp(ts_ull);
     options.timestamp = &readTimestamp;
 
@@ -647,7 +678,20 @@ const rocksdb::Comparator* TimestampComparator() {
     return &timestamp;
 }
 
+/**
+ * Sets a timestamp to assign to future writes in a transaction.
+ * All subsequent writes will be assigned this timestamp.
+ * If setTimestamp() is called again, specifying a new timestamp, future writes will use this
+ * new timestamp but past writes remain with their originally assigned timestamps.
+ * Writes that occur before any setTimestamp() is called will be assigned the timestamp
+ * specified in the last setTimestamp() call in the transaction, at commit time.
+ *
+ * setTimestamp() will fail if a commit timestamp is set using setCommitTimestamp() and not
+ * yet cleared with clearCommitTimestamp(). setTimestamp() will also fail if a prepareTimestamp
+ * has been set.
+ */
 Status RocksRecoveryUnit::setTimestamp(Timestamp timestamp) {
+    log() << "SetTimestamp " << timestamp;
     LOG(3) << "RocksDb set timestamp of future write operations to " << timestamp;
     invariant(_prepareTimestamp.isNull());
     invariant(_commitTimestamp.isNull(),
@@ -659,15 +703,18 @@ Status RocksRecoveryUnit::setTimestamp(Timestamp timestamp) {
                             << _readAtTimestamp.toString());
 
     _lastTimestampSet = timestamp;
+    _isTimestamped = true;
 
     return Status::OK();
 }
 
 void RocksRecoveryUnit::setCommitTimestamp(Timestamp timestamp) {
+    log() << "SetCommitTimestamp " << timestamp;
     // This can be called either outside of a WriteUnitOfWork or in a prepared transaction after
     // setPrepareTimestamp() is called. Prepared transactions ensure the correct timestamping
     // semantics and the set-once commitTimestamp behavior is exactly what prepared transactions
     // want.
+    invariant(!_inUnitOfWork() || !_prepareTimestamp.isNull(), toString(_getState()));
     invariant(_commitTimestamp.isNull(),
               str::stream() << "Commit timestamp set to " << _commitTimestamp.toString()
                             << " and trying to set it to " << timestamp.toString());
