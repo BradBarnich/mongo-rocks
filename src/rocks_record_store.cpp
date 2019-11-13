@@ -319,8 +319,8 @@ RocksRecordStore::RocksRecordStore(StringData ns,
       _cappedVisibilityManager(
           (_isCapped || _isOplog) ? new CappedVisibilityManager(this, durabilityManager) : nullptr),
       _ident(id.toString()),
-      _dataSizeKey(std::string("\0\0\0\0", 4) + "datasize-" + id.toString()),
-      _numRecordsKey(std::string("\0\0\0\0", 4) + "numrecords-" + id.toString()),
+      _dataSizeKey(std::string("\0\0\0\0", 4) + "datasize-" + id.toString() + std::string("\0\0\0\0\0\0\0\0", 8) ),
+      _numRecordsKey(std::string("\0\0\0\0", 4) + "numrecords-" + id.toString() + std::string("\0\0\0\0\0\0\0\0", 8)),
       _shuttingDown(false) {
     _oplogSinceLastCompaction.reset();
 
@@ -546,7 +546,7 @@ int64_t RocksRecordStore::cappedDeleteAsNeeded_inlock(OperationContext* opCtx,
             iter.reset(ru->NewIterator(_prefix));
         }
         auto seekKey = RocksRecordStore::_makeKey(_cappedOldestKeyHint);
-        seekKey.append(sizeof(uint64_t), '\xff');
+        //seekKey.append(sizeof(uint64_t), '\xff');
         iter->Seek(seekKey);
 
         RecordId newestOld;
@@ -730,6 +730,8 @@ StatusWith<RecordId> RocksRecordStore::insertRecord(OperationContext* opCtx,
         fassert(59001, opCtx->recoveryUnit()->setTimestamp(timestamp));
     }
 
+    log() << "insert: " << loc;
+
     // No need to register the write here, since we just allocated a new RecordId so no other
     // transaction can access this key before we commit
     ru->Put(_makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len));
@@ -762,7 +764,7 @@ Status RocksRecordStore::updateRecord(OperationContext* opCtx,
 
     int old_length = old_value.size();
 
-    // log() << "update: " << loc;
+    log() << "update: " << loc;
     ru->Put(key, rocksdb::Slice(data, len));
     if (_isOplog) {
         _oplogKeyTracker->insertKey(ru, loc, len);
@@ -1183,6 +1185,11 @@ boost::optional<Record> RocksRecordStore::Cursor::next() {
             }
         }
     }
+    if(iter->Valid()) {
+        log() << "iter next: " << iter->key().ToString(true);
+    }
+
+
     _skipNextAdvance = false;
 
     return curr();

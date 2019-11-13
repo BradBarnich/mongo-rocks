@@ -477,34 +477,39 @@ void RocksRecoveryUnit::_releaseSnapshot() {
 }
 
 void RocksRecoveryUnit::_commit(boost::optional<Timestamp> commitTime) {
+    if (!_commitTimestamp.isNull()) {
+        _isTimestamped = true;
+    }
+
     if (_mustBeTimestamped) {
         invariant(_isTimestamped);
     }
 
     rocksdb::WriteBatch* wb = _writeBatch.GetWriteBatch();
+    if (wb->Count() != 0) {
+        auto commitTimeString = encodeTimestamp(commitTime.value_or(Timestamp()).asULL());
 
-    auto commitTimeString = encodeTimestamp(_commitTimestamp.asULL());
+        if (_commitTimestamp.isNull()) {
+            std::vector<rocksdb::Slice> timestampSlices;
 
-    if (_commitTimestamp.isNull()) {
-        std::vector<rocksdb::Slice> timestampSlices;
+            auto zeroTs = encodeTimestamp(0ULL);
 
-        auto zeroTs = encodeTimestamp(0ULL);
-
-        for (const auto& ts : _timestamps) {
-            if (ts.size() == 0) {
-                if (commitTime) {
-                    log() << "commit: setting unspecified timestamp to " << commitTime;
-                    timestampSlices.emplace_back(commitTimeString);
+            for (const auto& ts : _timestamps) {
+                if (ts.size() == 0) {
+                    if (commitTime) {
+                        log() << "commit: setting unspecified timestamp to " << commitTime;
+                        timestampSlices.emplace_back(commitTimeString);
+                    } else {
+                        timestampSlices.emplace_back(zeroTs);
+                    }
                 } else {
-                    timestampSlices.emplace_back(zeroTs);
+                    timestampSlices.emplace_back(ts);
                 }
-            } else {
-                timestampSlices.emplace_back(ts);
             }
+            wb->AssignTimestamps(timestampSlices);
+        } else {
+            wb->AssignTimestamp(commitTimeString);
         }
-        wb->AssignTimestamps(timestampSlices);
-    } else {
-        wb->AssignTimestamp(commitTimeString);
     }
 
     for (auto pair : _deltaCounters) {
@@ -527,6 +532,7 @@ void RocksRecoveryUnit::_commit(boost::optional<Timestamp> commitTime) {
     _writeBatch.Clear();
     _timestamps.clear();
     _isTimestamped = false;
+    _mustBeTimestamped = false;
 
     // this started causing a crash
     // _db->Flush(rocksdb::FlushOptions());

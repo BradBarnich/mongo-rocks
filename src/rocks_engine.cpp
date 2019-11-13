@@ -462,6 +462,7 @@ bool RocksEngine::hasIdent(OperationContext* opCtx, StringData ident) const {
 }
 
 std::vector<std::string> RocksEngine::getAllIdents(OperationContext* opCtx) const {
+    stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
     std::vector<std::string> indents;
     for (auto& entry : _identMap) {
         indents.push_back(entry.first);

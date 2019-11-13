@@ -92,6 +92,12 @@ public:
     }
 
     int CompareWithoutTimestamp(const rocksdb::Slice& a, const rocksdb::Slice& b) const override {
+        // if(a.size() > b.size() && a.size() - b.size() == 8 && b[b.size()-1] != '\0' && b[b.size()-1] != '\xff' ) {
+        //     //breakpoint();
+        // }
+        if(b.size() > a.size() && b.size() - a.size() == 8 && a[a.size()-1] != '\0' && a[a.size()-1] != '\xff') {
+            //breakpoint();
+        }
         if (a.size() < timestamp_size() || b.size() < timestamp_size()) {
             breakpoint();
         }

@@ -23,6 +23,7 @@ env.Library(
         'src/rocks_counter_manager.cpp',
         'src/rocks_engine.cpp',
         'src/rocks_record_store.cpp',
+        'src/rocks_record_store_mongod.cpp',
         'src/rocks_recovery_unit.cpp',
         'src/rocks_index.cpp',
         'src/rocks_durability_manager.cpp',
@@ -50,6 +51,10 @@ env.Library(
         'storage_rocks_global_options',
         ],
     LIBDEPS_PRIVATE= [
+        '$BUILD_DIR/mongo/db/db_raii',
+        '$BUILD_DIR/mongo/db/commands/server_status',
+        '$BUILD_DIR/mongo/db/snapshot_window_options',
+        '$BUILD_DIR/mongo/db/storage/storage_repair_observer',
         '$BUILD_DIR/mongo/util/options_parser/options_parser',
         '$BUILD_DIR/mongo/util/debugger',
         ],
@@ -62,15 +67,21 @@ env.Library(
         'src/rocks_init.cpp',
         'src/rocks_options_init.cpp',
         'src/rocks_parameters.cpp',
-        'src/rocks_record_store_mongod.cpp',
         'src/rocks_server_status.cpp',
         'src/rocks_stats_parser.cpp',
         ],
     LIBDEPS= [
         'storage_rocks_base',
-        '$BUILD_DIR/mongo/db/storage/kv/kv_prefix'
+        '$BUILD_DIR/mongo/db/db_raii',
+        '$BUILD_DIR/mongo/db/storage/storage_engine_impl',
+        '$BUILD_DIR/mongo/db/storage/storage_engine_lock_file',
+        '$BUILD_DIR/mongo/db/storage/storage_engine_metadata',
         ],
     LIBDEPS_PRIVATE= [
+        '$BUILD_DIR/mongo/db/catalog/database_holder',
+        '$BUILD_DIR/mongo/db/commands/server_status',
+        '$BUILD_DIR/mongo/db/concurrency/lock_manager',
+        '$BUILD_DIR/mongo/db/storage/storage_engine_common',
         '$BUILD_DIR/mongo/util/options_parser/options_parser',
         ],
     LIBDEPS_DEPENDENTS=['$BUILD_DIR/mongo/db/serveronly']
