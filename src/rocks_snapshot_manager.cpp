@@ -30,8 +30,8 @@
 
 #include "mongo/platform/basic.h"
 
-#include "rocks_snapshot_manager.h"
 #include "rocks_recovery_unit.h"
+#include "rocks_snapshot_manager.h"
 
 #include <rocksdb/db.h>
 
@@ -39,57 +39,58 @@
 #include "mongo/util/log.h"
 
 namespace mongo {
-    void RocksSnapshotManager::setCommittedSnapshot(const Timestamp& timestamp) {
-        stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
+void RocksSnapshotManager::setCommittedSnapshot(const Timestamp& timestamp) {
+    stdx::lock_guard<Latch> lock(_committedSnapshotMutex);
 
-        invariant(!_committedSnapshot || *_committedSnapshot <= timestamp);
-        _committedSnapshot = timestamp;
+    invariant(!_committedSnapshot || *_committedSnapshot <= timestamp);
+    _committedSnapshot = timestamp;
+}
+
+void RocksSnapshotManager::setLocalSnapshot(const Timestamp& timestamp) {
+    stdx::lock_guard<Latch> lock(_localSnapshotMutex);
+    if (timestamp.isNull())
+        _localSnapshot = boost::none;
+    else
+        _localSnapshot = timestamp;
+}
+
+boost::optional<Timestamp> RocksSnapshotManager::getLocalSnapshot() {
+    stdx::lock_guard<Latch> lock(_localSnapshotMutex);
+    return _localSnapshot;
+}
+
+void RocksSnapshotManager::dropAllSnapshots() {
+    stdx::lock_guard<Latch> lock(_committedSnapshotMutex);
+    _committedSnapshot = boost::none;
+}
+
+bool RocksSnapshotManager::haveCommittedSnapshot() const {
+    stdx::lock_guard<Latch> lock(_committedSnapshotMutex);
+    return bool(_committedSnapshot);
+}
+
+boost::optional<Timestamp> RocksSnapshotManager::getCommittedSnapshot() const {
+    stdx::lock_guard<Latch> lock(_committedSnapshotMutex);
+
+    uassert(ErrorCodes::ReadConcernMajorityNotAvailableYet,
+            "Committed view disappeared while running operation",
+            _committedSnapshot);
+
+    return _committedSnapshot;
+}
+
+RocksSnapshotManager::SnapshotHolder::SnapshotHolder(OperationContext* opCtx, uint64_t name_) {
+    name = name_;
+    auto rru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
+    snapshot = rru->getPreparedSnapshot();
+    db = rru->getDB();
+}
+
+RocksSnapshotManager::SnapshotHolder::~SnapshotHolder() {
+    if (snapshot != nullptr) {
+        invariant(db != nullptr);
+        db->ReleaseSnapshot(snapshot);
     }
-
-    void RocksSnapshotManager::setLocalSnapshot(const Timestamp& timestamp) {
-        stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
-        if (timestamp.isNull())
-            _localSnapshot = boost::none;
-        else
-            _localSnapshot = timestamp;
-    }
-
-    boost::optional<Timestamp> RocksSnapshotManager::getLocalSnapshot() {
-        stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
-        return _localSnapshot;
-    }
-
-    void RocksSnapshotManager::dropAllSnapshots() {
-        stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
-        _committedSnapshot = boost::none;
-    }
-
-    bool RocksSnapshotManager::haveCommittedSnapshot() const {
-        stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
-        return bool(_committedSnapshot);
-    }
-
-    boost::optional<Timestamp> RocksSnapshotManager::getCommittedSnapshot() const {
-        stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
-
-        uassert(ErrorCodes::ReadConcernMajorityNotAvailableYet,
-                "Committed view disappeared while running operation", _committedSnapshot);
-
-        return _committedSnapshot;
-    }
-
-    RocksSnapshotManager::SnapshotHolder::SnapshotHolder(OperationContext* opCtx, uint64_t name_) {
-        name = name_;
-        auto rru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
-        snapshot = rru->getPreparedSnapshot();
-        db = rru->getDB();
-    }
-
-    RocksSnapshotManager::SnapshotHolder::~SnapshotHolder() {
-        if (snapshot != nullptr) {
-            invariant(db != nullptr);
-            db->ReleaseSnapshot(snapshot);
-        }
-    }
+}
 
 }  // namespace mongo

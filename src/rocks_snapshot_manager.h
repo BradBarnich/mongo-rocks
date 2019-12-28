@@ -32,7 +32,7 @@
 
 #include "mongo/db/storage/snapshot_manager.h"
 
-#include "mongo/stdx/mutex.h"
+#include "mongo/platform/mutex.h"
 
 #pragma once
 
@@ -74,11 +74,11 @@ public:
     boost::optional<Timestamp> getLocalSnapshot();
 
 private:
-    mutable stdx::mutex _committedSnapshotMutex;  // Guards _committedSnapshot
+    mutable Mutex _committedSnapshotMutex = MONGO_MAKE_LATCH();  // Guards _committedSnapshot
     boost::optional<Timestamp> _committedSnapshot;
 
     // Snapshot to use for reads at a local stable timestamp.
-    mutable stdx::mutex _localSnapshotMutex;  // Guards _localSnapshot.
+    mutable Mutex _localSnapshotMutex = MONGO_MAKE_LATCH();  // Guards _localSnapshot.
     boost::optional<Timestamp> _localSnapshot;
 };
-} // namespace mongo
+}  // namespace mongo

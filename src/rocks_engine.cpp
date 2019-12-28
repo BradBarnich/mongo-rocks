@@ -168,8 +168,6 @@ RocksTicketServerParameter openReadTransactionParam(&openReadTransaction,
 
 // first four bytes are the default prefix 0
 const std::string RocksEngine::kMetadataPrefix("\0\0\0\0metadata-", 13);
-const std::string RocksEngine::kMetadataPrefixWithTimestamp("\0\0\0\0metadata-\0\0\0\0\0\0\0\0",
-                                                            21);
 
 RocksEngine::RocksEngine(const std::string& path, bool durable, int formatVersion, bool readOnly)
     : _path(path), _durable(durable), _formatVersion(formatVersion), _maxPrefix(0) {
@@ -213,7 +211,12 @@ RocksEngine::RocksEngine(const std::string& path, bool durable, int formatVersio
     _counterManager.reset(new RocksCounterManager(_db.get(), rocksGlobalOptions.crashSafeCounters));
 
     // open iterator
-    std::unique_ptr<rocksdb::Iterator> iter(_db->NewIterator(rocksdb::ReadOptions()));
+    auto readOptions = rocksdb::ReadOptions();
+    std::string ts_buf;
+    ts_buf.append(8, '\xff');
+    rocksdb::Slice ts(ts_buf);
+    readOptions.timestamp = &ts;
+    std::unique_ptr<rocksdb::Iterator> iter(_db->NewIterator(readOptions));
 
     // find maxPrefix
     iter->SeekToLast();
@@ -227,9 +230,8 @@ RocksEngine::RocksEngine(const std::string& path, bool durable, int formatVersio
     // load ident to prefix map. also update _maxPrefix if there's any prefix bigger than
     // current _maxPrefix
     {
-        stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
-        for (iter->Seek(kMetadataPrefixWithTimestamp);
-             iter->Valid() && iter->key().starts_with(kMetadataPrefix);
+        stdx::lock_guard<Latch> lk(_identMapMutex);
+        for (iter->Seek(kMetadataPrefix); iter->Valid() && iter->key().starts_with(kMetadataPrefix);
              iter->Next()) {
             invariantRocksOK(iter->status());
             rocksdb::Slice ident(iter->key());
@@ -315,7 +317,7 @@ Status RocksEngine::createRecordStore(OperationContext* opCtx,
         // oplog needs two prefixes, so we also reserve the next one
         uint64_t oplogTrackerPrefix = 0;
         {
-            stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+            stdx::lock_guard<Latch> lk(_identMapMutex);
             oplogTrackerPrefix = ++_maxPrefix;
         }
         // we also need to write out the new prefix to the database. this is just an
@@ -362,7 +364,7 @@ std::unique_ptr<RecordStore> RocksEngine::getRecordStore(OperationContext* opCtx
                                              prefix);
 
     {
-        stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
+        stdx::lock_guard<Latch> lk(_identObjectMapMutex);
         _identCollectionMap[ident] = recordStore.get();
     }
     return std::move(recordStore);
@@ -415,7 +417,7 @@ std::unique_ptr<SortedDataInterface> RocksEngine::getSortedDataInterface(
         }
     }
     {
-        stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
+        stdx::lock_guard<Latch> lk(_identObjectMapMutex);
         _identIndexMap[ident] = static_cast<RocksIndexBase*>(index.get());
     }
     return index;
@@ -450,19 +452,19 @@ Status RocksEngine::dropIdent(OperationContext* opCtx, StringData ident) {
 
     if (s.isOK()) {
         // remove from map
-        stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+        stdx::lock_guard<Latch> lk(_identMapMutex);
         _identMap.erase(ident);
     }
     return s;
 }
 
 bool RocksEngine::hasIdent(OperationContext* opCtx, StringData ident) const {
-    stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+    stdx::lock_guard<Latch> lk(_identMapMutex);
     return _identMap.find(ident) != _identMap.end();
 }
 
 std::vector<std::string> RocksEngine::getAllIdents(OperationContext* opCtx) const {
-    stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+    stdx::lock_guard<Latch> lk(_identMapMutex);
     std::vector<std::string> indents;
     for (auto& entry : _identMap) {
         indents.push_back(entry.first);
@@ -488,7 +490,7 @@ void RocksEngine::setJournalListener(JournalListener* jl) {
 }
 
 int64_t RocksEngine::getIdentSize(OperationContext* opCtx, StringData ident) {
-    stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
+    stdx::lock_guard<Latch> lk(_identObjectMapMutex);
 
     auto indexIter = _identIndexMap.find(ident);
     if (indexIter != _identIndexMap.end()) {
@@ -544,7 +546,7 @@ Status RocksEngine::_createIdent(StringData ident, BSONObjBuilder* configBuilder
     BSONObj config;
     uint32_t prefix = 0;
     {
-        stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+        stdx::lock_guard<Latch> lk(_identMapMutex);
         if (_identMap.find(ident) != _identMap.end()) {
             // already exists
             return Status::OK();
@@ -576,14 +578,14 @@ Status RocksEngine::_createIdent(StringData ident, BSONObjBuilder* configBuilder
 }
 
 BSONObj RocksEngine::_getIdentConfig(StringData ident) {
-    stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+    stdx::lock_guard<Latch> lk(_identMapMutex);
     auto identIter = _identMap.find(ident);
     invariant(identIter != _identMap.end());
     return identIter->second.copy();
 }
 
 BSONObj RocksEngine::_tryGetIdentConfig(StringData ident) {
-    stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+    stdx::lock_guard<Latch> lk(_identMapMutex);
     auto identIter = _identMap.find(ident);
     const bool identFound = (identIter != _identMap.end());
     return identFound ? identIter->second.copy() : BSONObj();

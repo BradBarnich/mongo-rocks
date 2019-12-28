@@ -99,9 +99,8 @@ public:
                                      StringData ident,
                                      const IndexDescriptor* desc) override;
 
-    std::unique_ptr<SortedDataInterface> getSortedDataInterface(OperationContext* opCtx,
-                                                StringData ident,
-                                                const IndexDescriptor* desc) override;
+    std::unique_ptr<SortedDataInterface> getSortedDataInterface(
+        OperationContext* opCtx, StringData ident, const IndexDescriptor* desc) override;
 
     Status dropIdent(OperationContext* opCtx, StringData ident) override;
 
@@ -267,7 +266,7 @@ private:
     const int _formatVersion;
 
     // ident map stores mapping from ident to a BSON config
-    mutable stdx::mutex _identMapMutex;
+    mutable Mutex _identMapMutex = MONGO_MAKE_LATCH();
     typedef StringMap<BSONObj> IdentMap;
     IdentMap _identMap;
     std::string _oplogIdent;
@@ -277,7 +276,7 @@ private:
 
     // _identObjectMapMutex protects both _identIndexMap and _identCollectionMap. It should
     // never be locked together with _identMapMutex
-    mutable stdx::mutex _identObjectMapMutex;
+    mutable Mutex _identObjectMapMutex = MONGO_MAKE_LATCH();
     // mapping from ident --> index object. we don't own the object
     StringMap<RocksIndexBase*> _identIndexMap;
     // mapping from ident --> collection object
@@ -294,7 +293,6 @@ private:
     std::unique_ptr<RocksCompactionScheduler> _compactionScheduler;
 
     static const std::string kMetadataPrefix;
-    static const std::string kMetadataPrefixWithTimestamp;
 
     std::unique_ptr<RocksDurabilityManager> _durabilityManager;
     class RocksJournalFlusher;

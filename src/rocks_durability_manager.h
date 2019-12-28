@@ -31,31 +31,31 @@
 #pragma once
 
 namespace rocksdb {
-    class DB;
+class DB;
 }
 
 namespace mongo {
 
-    class JournalListener;
+class JournalListener;
 
-    class RocksDurabilityManager {
-        RocksDurabilityManager(const RocksDurabilityManager&) = delete;
-        RocksDurabilityManager& operator=(const RocksDurabilityManager&) = delete;
+class RocksDurabilityManager {
+    RocksDurabilityManager(const RocksDurabilityManager&) = delete;
+    RocksDurabilityManager& operator=(const RocksDurabilityManager&) = delete;
 
-    public:
-        RocksDurabilityManager(rocksdb::DB* db, bool durable);
+public:
+    RocksDurabilityManager(rocksdb::DB* db, bool durable);
 
-        void setJournalListener(JournalListener* jl);
+    void setJournalListener(JournalListener* jl);
 
-        void waitUntilDurable(bool forceFlush);
+    void waitUntilDurable(bool forceFlush);
 
-    private:
-        rocksdb::DB* _db;  // not owned
-        bool _durable;
-        // Notified when we commit to the journal.
-        JournalListener* _journalListener;
-        // Protects _journalListener.
-        stdx::mutex _journalListenerMutex;
-    };
+private:
+    rocksdb::DB* _db;  // not owned
+    bool _durable;
+    // Notified when we commit to the journal.
+    JournalListener* _journalListener;
+    // Protects _journalListener.
+    Mutex _journalListenerMutex = MONGO_MAKE_LATCH();
+};
 
-} // namespace mongo
+}  // namespace mongo

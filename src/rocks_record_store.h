@@ -40,8 +40,8 @@
 #include "mongo/db/storage/capped_callback.h"
 #include "mongo/db/storage/record_store.h"
 #include "mongo/platform/atomic_word.h"
+#include "mongo/platform/mutex.h"
 #include "mongo/stdx/condition_variable.h"
-#include "mongo/stdx/mutex.h"
 #include "mongo/stdx/thread.h"
 #include "mongo/util/timer.h"
 
@@ -87,7 +87,7 @@ private:
     void _addUncommittedRecord_inlock(OperationContext* opCtx, const RecordId& record);
 
     // protects the state
-    mutable stdx::mutex _uncommittedRecordIdsMutex;
+    mutable Mutex _uncommittedRecordIdsMutex = MONGO_MAKE_LATCH();
     RocksRecordStore* const _rs;
     SortedRecordIds _uncommittedRecords;
     RecordId _oplog_highestSeen;
@@ -207,7 +207,7 @@ public:
     virtual Status updateCappedSize(OperationContext* opCtx, long long cappedSize) override final;
 
     void setCappedCallback(CappedCallback* cb) {
-        stdx::lock_guard<stdx::mutex> lk(_cappedCallbackMutex);
+        stdx::lock_guard<Latch> lk(_cappedCallbackMutex);
         _cappedCallback = cb;
     }
     int64_t cappedMaxDocs() const {
@@ -312,7 +312,7 @@ private:
     int64_t _cappedMaxSizeSlack;  // when to start applying backpressure
     const int64_t _cappedMaxDocs;
     CappedCallback* _cappedCallback;
-    stdx::mutex _cappedCallbackMutex;  // guards _cappedCallback.
+    Mutex _cappedCallbackMutex = MONGO_MAKE_LATCH();  // guards _cappedCallback.
 
     mutable stdx::timed_mutex _cappedDeleterMutex;  // see comment in ::cappedDeleteAsNeeded
     int _cappedDeleteCheckCount;                    // see comment in ::cappedDeleteAsNeeded

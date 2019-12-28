@@ -84,7 +84,7 @@ public:
 
     virtual void rollback() {
         _cappedVisibilityManager->dealtWithCappedRecord(_it, false);
-        stdx::lock_guard<stdx::mutex> lk(_rs->_cappedCallbackMutex);
+        stdx::lock_guard<Latch> lk(_rs->_cappedCallbackMutex);
         if (_rs->_cappedCallback) {
             _rs->_cappedCallback->notifyCappedWaitersIfNeeded();
         }
@@ -107,7 +107,7 @@ CappedVisibilityManager::CappedVisibilityManager(RocksRecordStore* rs,
 
 void CappedVisibilityManager::addUncommittedRecord(OperationContext* opCtx,
                                                    const RecordId& record) {
-    stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+    stdx::lock_guard<Latch> lk(_uncommittedRecordIdsMutex);
     _addUncommittedRecord_inlock(opCtx, record);
 }
 
@@ -125,7 +125,7 @@ void CappedVisibilityManager::_addUncommittedRecord_inlock(OperationContext* opC
 
 RecordId CappedVisibilityManager::getNextAndAddUncommittedRecord(OperationContext* opCtx,
                                                                  std::function<RecordId()> nextId) {
-    stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+    stdx::lock_guard<Latch> lk(_uncommittedRecordIdsMutex);
     RecordId record = nextId();
     _addUncommittedRecord_inlock(opCtx, record);
     return record;
@@ -135,7 +135,7 @@ void CappedVisibilityManager::oplogJournalThreadLoop(RocksDurabilityManager* dur
     try {
         Client::initThread("RocksOplogJournalThread");
         while (true) {
-            stdx::unique_lock<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+            stdx::unique_lock<Latch> lk(_uncommittedRecordIdsMutex);
             {
                 MONGO_IDLE_THREAD_BLOCK;
                 _opsWaitingForJournalCV.wait(
@@ -160,7 +160,7 @@ void CappedVisibilityManager::oplogJournalThreadLoop(RocksDurabilityManager* dur
             _opsBecameVisibleCV.notify_all();
             lk.unlock();
 
-            stdx::lock_guard<stdx::mutex> cappedCallbackLock(_rs->_cappedCallbackMutex);
+            stdx::lock_guard<Latch> cappedCallbackLock(_rs->_cappedCallbackMutex);
             if (_rs->_cappedCallback) {
                 _rs->_cappedCallback->notifyCappedWaitersIfNeeded();
             }
@@ -172,7 +172,7 @@ void CappedVisibilityManager::oplogJournalThreadLoop(RocksDurabilityManager* dur
 
 void CappedVisibilityManager::joinOplogJournalThreadLoop() {
     {
-        stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+        stdx::lock_guard<Latch> lk(_uncommittedRecordIdsMutex);
         _shuttingDown = true;
     }
     if (_oplogJournalThread.joinable()) {
@@ -185,7 +185,7 @@ void CappedVisibilityManager::waitForAllEarlierOplogWritesToBeVisible(
     OperationContext* opCtx) const {
     invariant(opCtx->lockState()->isNoop() || !opCtx->lockState()->inAWriteUnitOfWork());
 
-    stdx::unique_lock<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+    stdx::unique_lock<Latch> lk(_uncommittedRecordIdsMutex);
     const auto waitingFor = _oplog_highestSeen;
     opCtx->waitForConditionOrInterrupt(_opsBecameVisibleCV, lk, [&] {
         return _uncommittedRecords.empty() || _uncommittedRecords.front() > waitingFor;
@@ -193,7 +193,7 @@ void CappedVisibilityManager::waitForAllEarlierOplogWritesToBeVisible(
 }
 
 void CappedVisibilityManager::dealtWithCappedRecord(SortedRecordIds::iterator it, bool didCommit) {
-    stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+    stdx::lock_guard<Latch> lk(_uncommittedRecordIdsMutex);
     if (didCommit && _rs->_isOplog && *it != _oplog_highestSeen) {
         // Defer removal from _uncommittedRecordIds until it is durable. We don't need to wait
         // for durability of ops that didn't commit because they won't become durable.
@@ -213,7 +213,7 @@ void CappedVisibilityManager::dealtWithCappedRecord(SortedRecordIds::iterator it
 }
 
 bool CappedVisibilityManager::isCappedHidden(const RecordId& record) const {
-    stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+    stdx::lock_guard<Latch> lk(_uncommittedRecordIdsMutex);
     if (_uncommittedRecords.empty()) {
         return false;
     }
@@ -222,7 +222,7 @@ bool CappedVisibilityManager::isCappedHidden(const RecordId& record) const {
 
 void CappedVisibilityManager::updateHighestSeen(const RecordId& record) {
     if (record > _oplog_highestSeen) {
-        stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+        stdx::lock_guard<Latch> lk(_uncommittedRecordIdsMutex);
         if (record > _oplog_highestSeen) {
             _oplog_highestSeen = record;
         }
@@ -230,12 +230,12 @@ void CappedVisibilityManager::updateHighestSeen(const RecordId& record) {
 }
 
 void CappedVisibilityManager::setHighestSeen(const RecordId& record) {
-    stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+    stdx::lock_guard<Latch> lk(_uncommittedRecordIdsMutex);
     _oplog_highestSeen = record;
 }
 
 RecordId CappedVisibilityManager::oplogStartHack() const {
-    stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+    stdx::lock_guard<Latch> lk(_uncommittedRecordIdsMutex);
     if (_uncommittedRecords.empty()) {
         return _oplog_highestSeen;
     } else {
@@ -244,7 +244,7 @@ RecordId CappedVisibilityManager::oplogStartHack() const {
 }
 
 RecordId CappedVisibilityManager::lowestCappedHiddenRecord() const {
-    stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+    stdx::lock_guard<Latch> lk(_uncommittedRecordIdsMutex);
     return _uncommittedRecords.empty() ? RecordId() : _uncommittedRecords.front();
 }
 
@@ -319,8 +319,10 @@ RocksRecordStore::RocksRecordStore(StringData ns,
       _cappedVisibilityManager(
           (_isCapped || _isOplog) ? new CappedVisibilityManager(this, durabilityManager) : nullptr),
       _ident(id.toString()),
-      _dataSizeKey(std::string("\0\0\0\0", 4) + "datasize-" + id.toString() + std::string("\0\0\0\0\0\0\0\0", 8) ),
-      _numRecordsKey(std::string("\0\0\0\0", 4) + "numrecords-" + id.toString() + std::string("\0\0\0\0\0\0\0\0", 8)),
+      _dataSizeKey(std::string("\0\0\0\0", 4) + "datasize-" + id.toString() +
+                   std::string("\0\0\0\0\0\0\0\0", 8)),
+      _numRecordsKey(std::string("\0\0\0\0", 4) + "numrecords-" + id.toString() +
+                     std::string("\0\0\0\0\0\0\0\0", 8)),
       _shuttingDown(false) {
     _oplogSinceLastCompaction.reset();
 
@@ -546,7 +548,6 @@ int64_t RocksRecordStore::cappedDeleteAsNeeded_inlock(OperationContext* opCtx,
             iter.reset(ru->NewIterator(_prefix));
         }
         auto seekKey = RocksRecordStore::_makeKey(_cappedOldestKeyHint);
-        //seekKey.append(sizeof(uint64_t), '\xff');
         iter->Seek(seekKey);
 
         RecordId newestOld;
@@ -589,7 +590,7 @@ int64_t RocksRecordStore::cappedDeleteAsNeeded_inlock(OperationContext* opCtx,
             }
 
             {
-                stdx::lock_guard<stdx::mutex> lk(_cappedCallbackMutex);
+                stdx::lock_guard<Latch> lk(_cappedCallbackMutex);
                 if (_cappedCallback) {
                     uassertStatusOK(_cappedCallback->aboutToDeleteCapped(
                         opCtx,
@@ -984,7 +985,7 @@ void RocksRecordStore::cappedTruncateAfter(OperationContext* opCtx, RecordId end
 
     // Compute the number and associated sizes of the records to delete.
     {
-        stdx::lock_guard<stdx::mutex> cappedCallbackLock(_cappedCallbackMutex);
+        stdx::lock_guard<Latch> cappedCallbackLock(_cappedCallbackMutex);
         do {
             std::string key(_makePrefixedKey(_prefix, record->id));
             if (!ru->transaction()->registerWrite(key)) {
@@ -1115,7 +1116,6 @@ RocksRecordStore::Cursor::Cursor(OperationContext* opCtx,
 void RocksRecordStore::Cursor::positionIterator() {
     _skipNextAdvance = false;
     auto seekTarget = RocksRecordStore::_makeKey(_lastLoc);
-    // seekTarget.append(sizeof(uint64_t), '\xff');
     if (!_iterator->Valid() || _iterator->key() != seekTarget) {
         _iterator->Seek(seekTarget);
         if (!_iterator->Valid()) {
@@ -1185,7 +1185,7 @@ boost::optional<Record> RocksRecordStore::Cursor::next() {
             }
         }
     }
-    if(iter->Valid()) {
+    if (iter->Valid()) {
         log() << "iter next: " << iter->key().ToString(true);
     }
 

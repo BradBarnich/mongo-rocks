@@ -33,142 +33,140 @@
 #include <atomic>
 #include <map>
 #include <memory>
-#include <string>
 #include <mutex>
+#include <string>
 
 // for invariant()
 #include "mongo/util/assert_util.h"
 
 namespace mongo {
-    RocksTransactionEngine::RocksTransactionEngine()
-        : _latestSnapshotId(1),
-          _nextTransactionId(1),
-          _keyInfo(SimpleStringDataComparator::kInstance.makeStringDataUnorderedMap<
-                   std::pair<uint64_t, KeysSortedBySnapshotListIter>>()) {}
+RocksTransactionEngine::RocksTransactionEngine()
+    : _latestSnapshotId(1),
+      _nextTransactionId(1),
+      _keyInfo(
+          SimpleStringDataComparator::kInstance
+              .makeStringDataUnorderedMap<std::pair<uint64_t, KeysSortedBySnapshotListIter>>()) {}
 
-    size_t RocksTransactionEngine::numKeysTracked() {
-        stdx::lock_guard<stdx::mutex> lk(_lock);
-        return _keyInfo.size();
-    }
-    size_t RocksTransactionEngine::numActiveSnapshots() {
-        stdx::lock_guard<stdx::mutex> lk(_lock);
-        return _activeSnapshots.size();
-    }
+size_t RocksTransactionEngine::numKeysTracked() {
+    stdx::lock_guard<Latch> lk(_lock);
+    return _keyInfo.size();
+}
+size_t RocksTransactionEngine::numActiveSnapshots() {
+    stdx::lock_guard<Latch> lk(_lock);
+    return _activeSnapshots.size();
+}
 
-    std::list<uint64_t>::iterator RocksTransactionEngine::_getLatestSnapshotId_inlock() {
-        return _activeSnapshots.insert(_activeSnapshots.end(), _latestSnapshotId);
-    }
+std::list<uint64_t>::iterator RocksTransactionEngine::_getLatestSnapshotId_inlock() {
+    return _activeSnapshots.insert(_activeSnapshots.end(), _latestSnapshotId);
+}
 
-    bool RocksTransactionEngine::_isKeyCommittedAfterSnapshot_inlock(const std::string& key,
-                                                                     uint64_t snapshotId) {
-        auto iter = _keyInfo.find(key);
-        return iter != _keyInfo.end() && iter->second.first > snapshotId;
-    }
+bool RocksTransactionEngine::_isKeyCommittedAfterSnapshot_inlock(const std::string& key,
+                                                                 uint64_t snapshotId) {
+    auto iter = _keyInfo.find(key);
+    return iter != _keyInfo.end() && iter->second.first > snapshotId;
+}
 
-    void RocksTransactionEngine::_registerCommittedKey_inlock(const std::string& key,
-                                                              uint64_t newSnapshotId) {
-        auto iter = _keyInfo.find(key);
-        if (iter != _keyInfo.end()) {
-            _keysSortedBySnapshot.erase(iter->second.second);
-            _keyInfo.erase(iter);
-        }
-
-        auto listIter = _keysSortedBySnapshot.insert(_keysSortedBySnapshot.end(),
-                                                     {key, newSnapshotId});
-        _keyInfo.insert({StringData(listIter->first), {newSnapshotId, listIter}});
+void RocksTransactionEngine::_registerCommittedKey_inlock(const std::string& key,
+                                                          uint64_t newSnapshotId) {
+    auto iter = _keyInfo.find(key);
+    if (iter != _keyInfo.end()) {
+        _keysSortedBySnapshot.erase(iter->second.second);
+        _keyInfo.erase(iter);
     }
 
-    void RocksTransactionEngine::_cleanUpKeysCommittedBeforeSnapshot_inlock(uint64_t snapshotId) {
-        while (!_keysSortedBySnapshot.empty() &&
-               _keysSortedBySnapshot.begin()->second <= snapshotId) {
-            auto keyInfoIter = _keyInfo.find(_keysSortedBySnapshot.begin()->first);
-            invariant(keyInfoIter != _keyInfo.end());
-            _keyInfo.erase(keyInfoIter);
-            _keysSortedBySnapshot.pop_front();
-        }
-    }
+    auto listIter = _keysSortedBySnapshot.insert(_keysSortedBySnapshot.end(), {key, newSnapshotId});
+    _keyInfo.insert({StringData(listIter->first), {newSnapshotId, listIter}});
+}
 
-    void RocksTransactionEngine::_cleanupSnapshot_inlock(
-        const std::list<uint64_t>::iterator& snapshotIter) {
-        bool needCleanup = _activeSnapshots.begin() == snapshotIter;
-        _activeSnapshots.erase(snapshotIter);
-        if (needCleanup) {
-            _cleanUpKeysCommittedBeforeSnapshot_inlock(_activeSnapshots.empty()
-                                                           ? std::numeric_limits<uint64_t>::max()
-                                                           : *_activeSnapshots.begin());
-        }
-    }
-
-    void RocksTransaction::commit() {
-        if (_writtenKeys.empty()) {
-            return;
-        }
-        uint64_t newSnapshotId = 0;
-        {
-            stdx::lock_guard<stdx::mutex> lk(_transactionEngine->_lock);
-            for (const auto& key : _writtenKeys) {
-                invariant(
-                    !_transactionEngine->_isKeyCommittedAfterSnapshot_inlock(key, _snapshotId));
-                invariant(_transactionEngine->_uncommittedTransactionId[key] == _transactionId);
-                _transactionEngine->_uncommittedTransactionId.erase(key);
-            }
-            newSnapshotId = _transactionEngine->_latestSnapshotId + 1;
-            for (const auto& key : _writtenKeys) {
-                _transactionEngine->_registerCommittedKey_inlock(key, newSnapshotId);
-            }
-            _cleanup_inlock();
-            _transactionEngine->_latestSnapshotId = newSnapshotId;
-        }
-        // cleanup
-        _writtenKeys.clear();
-    }
-
-    bool RocksTransaction::registerWrite(const std::string& key) {
-        stdx::lock_guard<stdx::mutex> lk(_transactionEngine->_lock);
-        if (_transactionEngine->_isKeyCommittedAfterSnapshot_inlock(key, _snapshotId)) {
-            // write-committed write conflict
-            return false;
-        }
-        auto uncommittedTransactionIter = _transactionEngine->_uncommittedTransactionId.find(key);
-        if (uncommittedTransactionIter != _transactionEngine->_uncommittedTransactionId.end() &&
-            uncommittedTransactionIter->second != _transactionId) {
-            // write-uncommitted write conflict
-            return false;
-        }
-        _writtenKeys.insert(key);
-        _transactionEngine->_uncommittedTransactionId[key] = _transactionId;
-        return true;
-    }
-
-    void RocksTransaction::abort() {
-        if (_writtenKeys.empty() && !_snapshotInitialized) {
-            return;
-        }
-        {
-            stdx::lock_guard<stdx::mutex> lk(_transactionEngine->_lock);
-            for (const auto& key : _writtenKeys) {
-                _transactionEngine->_uncommittedTransactionId.erase(key);
-            }
-            _cleanup_inlock();
-        }
-        _writtenKeys.clear();
-    }
-
-    void RocksTransaction::recordSnapshotId() {
-        {
-            stdx::lock_guard<stdx::mutex> lk(_transactionEngine->_lock);
-            _cleanup_inlock();
-            _activeSnapshotsIter = _transactionEngine->_getLatestSnapshotId_inlock();
-        }
-        _snapshotId = *_activeSnapshotsIter;
-        _snapshotInitialized = true;
-    }
-
-    void RocksTransaction::_cleanup_inlock() {
-        if (_snapshotInitialized) {
-            _transactionEngine->_cleanupSnapshot_inlock(_activeSnapshotsIter);
-            _snapshotInitialized = false;
-            _snapshotId = std::numeric_limits<uint64_t>::max();
-        }
+void RocksTransactionEngine::_cleanUpKeysCommittedBeforeSnapshot_inlock(uint64_t snapshotId) {
+    while (!_keysSortedBySnapshot.empty() && _keysSortedBySnapshot.begin()->second <= snapshotId) {
+        auto keyInfoIter = _keyInfo.find(_keysSortedBySnapshot.begin()->first);
+        invariant(keyInfoIter != _keyInfo.end());
+        _keyInfo.erase(keyInfoIter);
+        _keysSortedBySnapshot.pop_front();
     }
 }
+
+void RocksTransactionEngine::_cleanupSnapshot_inlock(
+    const std::list<uint64_t>::iterator& snapshotIter) {
+    bool needCleanup = _activeSnapshots.begin() == snapshotIter;
+    _activeSnapshots.erase(snapshotIter);
+    if (needCleanup) {
+        _cleanUpKeysCommittedBeforeSnapshot_inlock(_activeSnapshots.empty()
+                                                       ? std::numeric_limits<uint64_t>::max()
+                                                       : *_activeSnapshots.begin());
+    }
+}
+
+void RocksTransaction::commit() {
+    if (_writtenKeys.empty()) {
+        return;
+    }
+    uint64_t newSnapshotId = 0;
+    {
+        stdx::lock_guard<Latch> lk(_transactionEngine->_lock);
+        for (const auto& key : _writtenKeys) {
+            invariant(!_transactionEngine->_isKeyCommittedAfterSnapshot_inlock(key, _snapshotId));
+            invariant(_transactionEngine->_uncommittedTransactionId[key] == _transactionId);
+            _transactionEngine->_uncommittedTransactionId.erase(key);
+        }
+        newSnapshotId = _transactionEngine->_latestSnapshotId + 1;
+        for (const auto& key : _writtenKeys) {
+            _transactionEngine->_registerCommittedKey_inlock(key, newSnapshotId);
+        }
+        _cleanup_inlock();
+        _transactionEngine->_latestSnapshotId = newSnapshotId;
+    }
+    // cleanup
+    _writtenKeys.clear();
+}
+
+bool RocksTransaction::registerWrite(const std::string& key) {
+    stdx::lock_guard<Latch> lk(_transactionEngine->_lock);
+    if (_transactionEngine->_isKeyCommittedAfterSnapshot_inlock(key, _snapshotId)) {
+        // write-committed write conflict
+        return false;
+    }
+    auto uncommittedTransactionIter = _transactionEngine->_uncommittedTransactionId.find(key);
+    if (uncommittedTransactionIter != _transactionEngine->_uncommittedTransactionId.end() &&
+        uncommittedTransactionIter->second != _transactionId) {
+        // write-uncommitted write conflict
+        return false;
+    }
+    _writtenKeys.insert(key);
+    _transactionEngine->_uncommittedTransactionId[key] = _transactionId;
+    return true;
+}
+
+void RocksTransaction::abort() {
+    if (_writtenKeys.empty() && !_snapshotInitialized) {
+        return;
+    }
+    {
+        stdx::lock_guard<Latch> lk(_transactionEngine->_lock);
+        for (const auto& key : _writtenKeys) {
+            _transactionEngine->_uncommittedTransactionId.erase(key);
+        }
+        _cleanup_inlock();
+    }
+    _writtenKeys.clear();
+}
+
+void RocksTransaction::recordSnapshotId() {
+    {
+        stdx::lock_guard<Latch> lk(_transactionEngine->_lock);
+        _cleanup_inlock();
+        _activeSnapshotsIter = _transactionEngine->_getLatestSnapshotId_inlock();
+    }
+    _snapshotId = *_activeSnapshotsIter;
+    _snapshotInitialized = true;
+}
+
+void RocksTransaction::_cleanup_inlock() {
+    if (_snapshotInitialized) {
+        _transactionEngine->_cleanupSnapshot_inlock(_activeSnapshotsIter);
+        _snapshotInitialized = false;
+        _snapshotId = std::numeric_limits<uint64_t>::max();
+    }
+}
+}  // namespace mongo

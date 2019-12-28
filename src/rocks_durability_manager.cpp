@@ -38,12 +38,12 @@ RocksDurabilityManager::RocksDurabilityManager(rocksdb::DB* db, bool durable)
     : _db(db), _durable(durable), _journalListener(&NoOpJournalListener::instance) {}
 
 void RocksDurabilityManager::setJournalListener(JournalListener* jl) {
-    stdx::unique_lock<stdx::mutex> lk(_journalListenerMutex);
+    stdx::unique_lock<Latch> lk(_journalListenerMutex);
     _journalListener = jl;
 }
 
 void RocksDurabilityManager::waitUntilDurable(bool forceFlush) {
-    stdx::unique_lock<stdx::mutex> lk(_journalListenerMutex);
+    stdx::unique_lock<Latch> lk(_journalListenerMutex);
     JournalListener::Token token = _journalListener->getToken();
     if (!_durable || forceFlush) {
         invariantRocksOK(_db->Flush(rocksdb::FlushOptions()));

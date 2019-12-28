@@ -36,73 +36,79 @@
 #include <vector>
 
 #include "mongo/base/status.h"
-#include "mongo/stdx/mutex.h"
+#include "mongo/platform/mutex.h"
 #include "mongo/util/timer.h"
 
 namespace rocksdb {
-    class CompactionFilterFactory;
-    class DB;
-    class Iterator;
-    struct WriteOptions;
-    class WriteBatch;
-}
+class CompactionFilterFactory;
+class DB;
+class Iterator;
+struct WriteOptions;
+class WriteBatch;
+}  // namespace rocksdb
 
 namespace mongo {
 
-    class CompactionBackgroundJob;
+class CompactionBackgroundJob;
 
-    class RocksCompactionScheduler {
-    public:
-        RocksCompactionScheduler();
-        ~RocksCompactionScheduler();
+class RocksCompactionScheduler {
+public:
+    RocksCompactionScheduler();
+    ~RocksCompactionScheduler();
 
-        void start(rocksdb::DB* db);
+    void start(rocksdb::DB* db);
 
-        static int getSkippedDeletionsThreshold() { return kSkippedDeletionsThreshold; }
+    static int getSkippedDeletionsThreshold() {
+        return kSkippedDeletionsThreshold;
+    }
 
-        void reportSkippedDeletionsAboveThreshold(const std::string& prefix);
+    void reportSkippedDeletionsAboveThreshold(const std::string& prefix);
 
-        // schedule compact range operation for execution in _compactionThread
-        void compactAll();
-        void compactOplog(const std::string& begin, const std::string& end);
+    // schedule compact range operation for execution in _compactionThread
+    void compactAll();
+    void compactOplog(const std::string& begin, const std::string& end);
 
-        rocksdb::CompactionFilterFactory* createCompactionFilterFactory() const;
-        std::unordered_set<uint32_t> getDroppedPrefixes() const;
-        uint32_t loadDroppedPrefixes(rocksdb::Iterator* iter);
-        Status dropPrefixesAtomic(const std::vector<std::string>& prefixesToDrop,
-                                  const rocksdb::WriteOptions& syncOptions,
-                                  rocksdb::WriteBatch& wb);
-        void notifyCompacted(const std::string& begin, const std::string& end, bool rangeDropped,
-                             bool opSucceeded);
+    rocksdb::CompactionFilterFactory* createCompactionFilterFactory() const;
+    std::unordered_set<uint32_t> getDroppedPrefixes() const;
+    uint32_t loadDroppedPrefixes(rocksdb::Iterator* iter);
+    Status dropPrefixesAtomic(const std::vector<std::string>& prefixesToDrop,
+                              const rocksdb::WriteOptions& syncOptions,
+                              rocksdb::WriteBatch& wb);
+    void notifyCompacted(const std::string& begin,
+                         const std::string& end,
+                         bool rangeDropped,
+                         bool opSucceeded);
 
-    private:
-        void compactPrefix(const std::string& prefix);
-        void compactDroppedPrefix(const std::string& prefix);
-        void compact(const std::string& begin, const std::string& end, bool rangeDropped,
-                     uint32_t order);
-        void droppedPrefixCompacted(const std::string& prefix, bool opSucceeded);
+private:
+    void compactPrefix(const std::string& prefix);
+    void compactDroppedPrefix(const std::string& prefix);
+    void compact(const std::string& begin,
+                 const std::string& end,
+                 bool rangeDropped,
+                 uint32_t order);
+    void droppedPrefixCompacted(const std::string& prefix, bool opSucceeded);
 
-    private:
-        stdx::mutex _lock;
-        // protected by _lock
-        Timer _timer;
+private:
+    Mutex _lock = MONGO_MAKE_LATCH();
+    // protected by _lock
+    Timer _timer;
 
-        rocksdb::DB* _db;  // not owned
+    rocksdb::DB* _db;  // not owned
 
-        // Don't trigger compactions more often than every 10min
-        static const int kMinCompactionIntervalMins = 10;
-        // We'll compact the prefix if any operation on the prefix reports more than 50.000
-        // deletions it had to skip over (this is about 10ms extra overhead)
-        static const int kSkippedDeletionsThreshold = 50000;
+    // Don't trigger compactions more often than every 10min
+    static const int kMinCompactionIntervalMins = 10;
+    // We'll compact the prefix if any operation on the prefix reports more than 50.000
+    // deletions it had to skip over (this is about 10ms extra overhead)
+    static const int kSkippedDeletionsThreshold = 50000;
 
-        // thread for async execution of range compactions
-        std::unique_ptr<CompactionBackgroundJob> _compactionJob;
+    // thread for async execution of range compactions
+    std::unique_ptr<CompactionBackgroundJob> _compactionJob;
 
-        // set of all prefixes that are deleted. we delete them in the background thread
-        mutable stdx::mutex _droppedPrefixesMutex;
-        std::unordered_set<uint32_t> _droppedPrefixes;
-        std::atomic<uint32_t> _droppedPrefixesCount;
+    // set of all prefixes that are deleted. we delete them in the background thread
+    mutable Mutex _droppedPrefixesMutex = MONGO_MAKE_LATCH();
+    std::unordered_set<uint32_t> _droppedPrefixes;
+    std::atomic<uint32_t> _droppedPrefixesCount;
 
-        static const std::string kDroppedPrefix;
-    };
-}
+    static const std::string kDroppedPrefix;
+};
+}  // namespace mongo
