@@ -56,6 +56,16 @@
 
 #include "rocks_snapshot_manager.h"
 
+#define TRACING_ENABLED 1
+
+#if TRACING_ENABLED
+#define TRACE log()
+#else
+#define TRACE \
+    if (0)    \
+    log()
+#endif
+
 namespace mongo {
 namespace {
 
@@ -82,9 +92,7 @@ public:
           _timestampSlice(std::move(timestampSlice)) {
 
         _prefixEpsilon.append(1, '\0');
-        _prefixEpsilon.append(sizeof(uint64_t), '\xff');
         _prefixSliceEpsilon = rocksdb::Slice(_prefixEpsilon);
-        _nextPrefix.append(sizeof(uint64_t), '\xff');
         *_upperBound.get() = rocksdb::Slice(_nextPrefix);
         *_timestampSlice.get() = rocksdb::Slice(_timestamp);
     }
@@ -92,12 +100,11 @@ public:
 
     virtual bool Valid() const {
         return _baseIterator->Valid() && _baseIterator->key().starts_with(_prefixSlice) &&
-            _baseIterator->key().size() > _prefixSlice.size() + sizeof(uint64_t);
+            _baseIterator->key().size() > _prefixSlice.size();
     }
 
     virtual void SeekToFirst() {
         startOp();
-
         // seek to first key bigger than prefix
         _baseIterator->Seek(_prefixSliceEpsilon);
         endOp();
@@ -105,7 +112,7 @@ public:
     virtual void SeekToLast() {
         startOp();
         // we can't have upper bound set to _nextPrefix since we need to seek to it
-        *_upperBound.get() = rocksdb::Slice("\xFF\xFF\xFF\xFF\0\0\0\0\0\0\0\0", 12);
+        *_upperBound.get() = rocksdb::Slice("\xFF\xFF\xFF\xFF", 4);
         _baseIterator->Seek(rocksdb::Slice(_nextPrefix));
         // reset back to original value
         *_upperBound.get() = rocksdb::Slice(_nextPrefix);
@@ -120,12 +127,10 @@ public:
 
     virtual void Seek(const rocksdb::Slice& target) {
         startOp();
-        std::unique_ptr<char[]> buffer(new char[_prefix.size() + target.size() + sizeof(uint64_t)]);
+        std::unique_ptr<char[]> buffer(new char[_prefix.size() + target.size()]);
         memcpy(buffer.get(), _prefix.data(), _prefix.size());
         memcpy(buffer.get() + _prefix.size(), target.data(), target.size());
-        memset(buffer.get() + _prefix.size() + target.size(), 0xff, sizeof(uint64_t));
-        _baseIterator->Seek(
-            rocksdb::Slice(buffer.get(), _prefix.size() + target.size() + sizeof(uint64_t)));
+        _baseIterator->Seek(rocksdb::Slice(buffer.get(), _prefix.size() + target.size()));
         endOp();
     }
 
@@ -149,10 +154,13 @@ public:
     virtual rocksdb::Slice key() const {
         rocksdb::Slice strippedKey = _baseIterator->key();
         strippedKey.remove_prefix(_prefix.size());
-        return StripTimestampFromUserKey(strippedKey);
+        return strippedKey;
     }
     virtual rocksdb::Slice value() const {
         return _baseIterator->value();
+    }
+    virtual rocksdb::Slice timestamp() const {
+        return _baseIterator->timestamp();
     }
     virtual rocksdb::Status status() const {
         return _baseIterator->status();
@@ -163,22 +171,19 @@ public:
     // This Seek is specific because it will succeed only if it finds a key with `target`
     // prefix. If there is no such key, it will be !Valid()
     virtual void SeekPrefix(const rocksdb::Slice& target) {
-        std::unique_ptr<char[]> buffer(new char[_prefix.size() + target.size() + sizeof(uint64_t)]);
+        std::unique_ptr<char[]> buffer(new char[_prefix.size() + target.size()]);
         memcpy(buffer.get(), _prefix.data(), _prefix.size());
         memcpy(buffer.get() + _prefix.size(), target.data(), target.size());
-        memset(buffer.get() + _prefix.size() + target.size(), 0xff, sizeof(uint64_t));
 
         std::string tempUpperBound =
             rocksGetNextPrefix(rocksdb::Slice(buffer.get(), _prefix.size() + target.size()));
-        tempUpperBound.append(sizeof(uint64_t), '\xff');
 
         *_upperBound.get() = rocksdb::Slice(tempUpperBound);
         if (target.size() == 0) {
             // if target is empty, we'll try to seek to <prefix>, which is not good
             _baseIterator->Seek(_prefixSliceEpsilon);
         } else {
-            _baseIterator->Seek(
-                rocksdb::Slice(buffer.get(), _prefix.size() + target.size() + sizeof(uint64_t)));
+            _baseIterator->Seek(rocksdb::Slice(buffer.get(), _prefix.size() + target.size()));
         }
         // reset back to original value
         *_upperBound.get() = rocksdb::Slice(_nextPrefix);
@@ -224,6 +229,111 @@ private:
     std::unique_ptr<rocksdb::Slice> _timestampSlice;
 };
 
+static const std::string kZeroString{"\0\0\0\0\0\0\0\0", 8};
+static const rocksdb::Slice kZeroSlice{kZeroString.data(), kZeroString.size()};
+
+static const std::string kMaxString{"\xff\xff\xff\xff\xff\xff\xff\xff", 8};
+static const rocksdb::Slice kMaxSlice{kMaxString.data(), kMaxString.size()};
+
+class ConsistentTimestampUsage : public rocksdb::WriteBatch::Handler {
+public:
+    ConsistentTimestampUsage(rocksdb::DB* db, const rocksdb::Snapshot* snapshot)
+        : _db(db), _snapshot(snapshot) {}
+    ~ConsistentTimestampUsage() override {}
+
+    rocksdb::Status PutCF(uint32_t, const rocksdb::Slice& key, const rocksdb::Slice&) override {
+        AssignTimestamp(key);
+        return rocksdb::Status::OK();
+    }
+
+    rocksdb::Status DeleteCF(uint32_t, const rocksdb::Slice& key) override {
+        AssignTimestamp(key);
+        return rocksdb::Status::OK();
+    }
+
+    rocksdb::Status SingleDeleteCF(uint32_t, const rocksdb::Slice& key) override {
+        AssignTimestamp(key);
+        return rocksdb::Status::OK();
+    }
+
+    rocksdb::Status DeleteRangeCF(uint32_t,
+                                  const rocksdb::Slice& begin_key,
+                                  const rocksdb::Slice& end_key) override {
+        return rocksdb::Status::OK();
+    }
+
+    rocksdb::Status MergeCF(uint32_t, const rocksdb::Slice& key, const rocksdb::Slice&) override {
+        return rocksdb::Status::OK();
+    }
+
+    rocksdb::Status PutBlobIndexCF(uint32_t,
+                                   const rocksdb::Slice&,
+                                   const rocksdb::Slice&) override {
+        return rocksdb::Status::OK();
+    }
+
+    rocksdb::Status MarkBeginPrepare(bool) override {
+        return rocksdb::Status::OK();
+    }
+
+    rocksdb::Status MarkEndPrepare(const rocksdb::Slice&) override {
+        return rocksdb::Status::OK();
+    }
+
+    rocksdb::Status MarkCommit(const rocksdb::Slice&) override {
+        return rocksdb::Status::OK();
+    }
+
+    rocksdb::Status MarkRollback(const rocksdb::Slice&) override {
+        return rocksdb::Status::OK();
+    }
+
+private:
+    void AssignTimestamp(const rocksdb::Slice& key) {
+        rocksdb::Slice ts(key.data() + key.size() - sizeof(uint64_t), sizeof(uint64_t));
+        if (ts.compare(kZeroSlice) != 0) {
+            return;
+        }
+
+        rocksdb::ReadOptions options;
+        options.snapshot = _snapshot;
+        options.timestamp = &kMaxSlice;
+        std::unique_ptr<rocksdb::Iterator> iterator(_db->NewIterator(options));
+        std::string keyWithoutTimestamp(key.data(), key.size() - sizeof(uint64_t));
+        iterator->Seek(keyWithoutTimestamp);
+
+        if (iterator->Valid() && key.starts_with(iterator->key()) &&
+            key.size() == iterator->key().size() + sizeof(uint64_t)) {
+
+            std::string timestampString(iterator->key().data() + key.size(), sizeof(uint64_t));
+
+            uint64_t ts_ull;
+            ts_ull = endian::bigToNative(
+                *reinterpret_cast<const uint64_t*>(iterator->timestamp().data()));
+
+            TRACE << "put: " << key.ToString(true)
+                  << " without timestamp, using existing: " << Timestamp(ts_ull);
+
+
+            char* ptr = const_cast<char*>(key.data() + key.size() - sizeof(uint64_t));
+            memcpy(ptr, iterator->timestamp().data(), sizeof(uint64_t));
+        } else {
+            TRACE << "put: " << key.ToString(true)
+                  << " without timestamp, doesn't exist. no change.";
+        }
+    }
+
+    rocksdb::DB* _db;
+    const rocksdb::Snapshot* _snapshot;
+
+    // No copy or move.
+    ConsistentTimestampUsage(const ConsistentTimestampUsage&) = delete;
+    ConsistentTimestampUsage(ConsistentTimestampUsage&&) = delete;
+    ConsistentTimestampUsage& operator=(const ConsistentTimestampUsage&) = delete;
+    ConsistentTimestampUsage&& operator=(ConsistentTimestampUsage&&) = delete;
+};
+
+
 }  // anonymous namespace
 
 std::atomic<int> RocksRecoveryUnit::_totalLiveRecoveryUnits(0);
@@ -260,21 +370,25 @@ RocksRecoveryUnit::~RocksRecoveryUnit() {
 }
 
 void RocksRecoveryUnit::beginUnitOfWork(OperationContext* opCtx) {
-    invariant(!_areWriteUnitOfWorksBanned);
-    _opCtx = opCtx;
+    invariant(!_inUnitOfWork(), toString(_getState()));
+    invariant(!_isCommittingOrAborting(),
+              str::stream() << "cannot begin unit of work while commit or rollback handlers are "
+                               "running: "
+                            << toString(_getState()));
     _setState(_isActive() ? State::kActive : State::kInactiveInUnitOfWork);
-    log() << "begin uow";
+    _opCtx = opCtx;
+    TRACE << "begin uow";
 }
 
 void RocksRecoveryUnit::doCommitUnitOfWork() {
-    log() << "commit uow";
+    TRACE << "commit uow";
     invariant(_inUnitOfWork(), toString(_getState()));
 
     // Since we cannot have both a _lastTimestampSet and a _commitTimestamp, we set the
     // commit time as whichever is non-empty. If both are empty, then _lastTimestampSet will
     // be boost::none and we'll set the commit time to that.
     auto commitTime = _commitTimestamp.isNull() ? _lastTimestampSet : _commitTimestamp;
-
+    _setState(State::kCommitting);
     _commit(commitTime);
     commitRegisteredChanges(commitTime);
     _setState(State::kInactive);
@@ -285,7 +399,7 @@ void RocksRecoveryUnit::doCommitUnitOfWork() {
 }
 
 void RocksRecoveryUnit::doAbortUnitOfWork() {
-    log() << "abort uow";
+    TRACE << "abort uow";
     invariant(_inUnitOfWork(), toString(_getState()));
     _abort();
 }
@@ -301,7 +415,6 @@ void RocksRecoveryUnit::doAbandonSnapshot() {
     _writeBatch.Clear();
     _timestamps.clear();
     _releaseSnapshot();
-    _areWriteUnitOfWorksBanned = false;
 
     _setState(State::kInactive);
 }
@@ -311,12 +424,12 @@ void RocksRecoveryUnit::Put(const rocksdb::Slice& key, const rocksdb::Slice& val
     invariantRocksOK(_writeBatch.Put(key, value));
 
     if (!_commitTimestamp.isNull()) {
-        log() << "put: " << key.ToString(true) << ", timestamp(commit): " << _commitTimestamp;
+        TRACE << "put: " << key.ToString(true) << ", timestamp(commit): " << _commitTimestamp;
     } else if (_lastTimestampSet /*&& _lastTimestampSet != Timestamp(1, 1)*/) {
-        log() << "put: " << key.ToString(true) << ", timestamp: " << _lastTimestampSet;
+        TRACE << "put: " << key.ToString(true) << ", timestamp: " << _lastTimestampSet;
         _timestamps.push_back(encodeTimestamp(_lastTimestampSet.value_or(Timestamp()).asULL()));
     } else {
-        log() << "put: " << key.ToString(true) << ", timestamp(to be set at commit) ";
+        TRACE << "put: " << key.ToString(true) << ", timestamp(to be set at commit) ";
         _timestamps.push_back(std::string());
 
         // rocksdb::ReadOptions options;
@@ -335,16 +448,16 @@ void RocksRecoveryUnit::Put(const rocksdb::Slice& key, const rocksdb::Slice& val
         //     ts_ull =
         //         endian::bigToNative(*reinterpret_cast<const uint64_t*>(timestampString.data()));
 
-        //     log() << "put: " << key.ToString(true)
+        //     TRACE << "put: " << key.ToString(true)
         //           << " without timestamp, using existing: " << Timestamp(ts_ull);
 
 
         //     _timestamps.push_back(timestampString);
-        //     // log() << "removing existing key at timestamp: " << key.ToString(true) <<
+        //     // TRACE << "removing existing key at timestamp: " << key.ToString(true) <<
         //     // existingTimestamp;
         //     // iterator->Next();
         // } else {
-        //     log() << "put: " << key.ToString(true)
+        //     TRACE << "put: " << key.ToString(true)
         //           << " without timestamp, doesn't exist: " << Timestamp();
         //     _timestamps.push_back(encodeTimestamp(Timestamp().asULL()));
         // }
@@ -352,7 +465,7 @@ void RocksRecoveryUnit::Put(const rocksdb::Slice& key, const rocksdb::Slice& val
 }
 
 void RocksRecoveryUnit::Delete(const rocksdb::Slice& key) {
-    log() << "delete: " << key.ToString(true)
+    TRACE << "delete: " << key.ToString(true)
           << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
     invariantRocksOK(_writeBatch.Delete(key));
 
@@ -363,7 +476,7 @@ void RocksRecoveryUnit::Delete(const rocksdb::Slice& key) {
 
 void RocksRecoveryUnit::DeleteRange(const rocksdb::Slice& begin_key,
                                     const rocksdb::Slice& end_key) {
-    // log() << "delete range: " << begin_key.ToString(true) << ", timestamp: " <<
+    // TRACE << "delete range: " << begin_key.ToString(true) << ", timestamp: " <<
     // _lastTimestampSet.value_or(Timestamp());
     invariantRocksOK(_writeBatch.DeleteRange(begin_key, end_key));
 
@@ -373,7 +486,7 @@ void RocksRecoveryUnit::DeleteRange(const rocksdb::Slice& begin_key,
 }
 
 void RocksRecoveryUnit::SingleDelete(const rocksdb::Slice& key) {
-    // log() << "singledelete: " << key.ToString(true)
+    // TRACE << "singledelete: " << key.ToString(true)
     //       << ", timestamp: " << _lastTimestampSet.value_or(Timestamp());
     invariantRocksOK(_writeBatch.SingleDelete(key));
 
@@ -384,13 +497,11 @@ void RocksRecoveryUnit::SingleDelete(const rocksdb::Slice& key) {
 
 void RocksRecoveryUnit::TruncatePrefix(std::string prefix) {
     std::string beginKey(prefix);
-    // beginKey.append(sizeof(uint64_t), '\xff');
 
     std::string endKey(rocksGetNextPrefix(prefix));
-    // endKey.append(sizeof(uint64_t), '\xff');
 
     rocksdb::Range prefixRange(beginKey, endKey);
-    // log() << "delete range: " << prefixRange.start.ToString(true) << " - " <<
+    // TRACE << "delete range: " << prefixRange.start.ToString(true) << " - " <<
     // prefixRange.limit.ToString(true);
 
     invariantRocksOK(_writeBatch.DeleteRange(prefixRange.start, prefixRange.limit));
@@ -497,9 +608,11 @@ void RocksRecoveryUnit::_commit(boost::optional<Timestamp> commitTime) {
             for (const auto& ts : _timestamps) {
                 if (ts.size() == 0) {
                     if (commitTime) {
-                        log() << "commit: setting unspecified timestamp to " << commitTime;
+                        TRACE << "commit: setting unspecified timestamp to " << commitTime;
                         timestampSlices.emplace_back(commitTimeString);
                     } else {
+                        TRACE << "commit: setting unspecified timestamp to "
+                              << rocksdb::Slice(zeroTs).ToString(true);
                         timestampSlices.emplace_back(zeroTs);
                     }
                 } else {
@@ -507,7 +620,10 @@ void RocksRecoveryUnit::_commit(boost::optional<Timestamp> commitTime) {
                 }
             }
             wb->AssignTimestamps(timestampSlices);
+            ConsistentTimestampUsage handler(_db, snapshot());
+            wb->Iterate(&handler);
         } else {
+            TRACE << "commit: setting unspecified timestamp to (commit) " << _commitTimestamp;
             wb->AssignTimestamp(commitTimeString);
         }
     }
@@ -535,7 +651,7 @@ void RocksRecoveryUnit::_commit(boost::optional<Timestamp> commitTime) {
     _mustBeTimestamped = false;
 
     // this started causing a crash
-    // _db->Flush(rocksdb::FlushOptions());
+    _db->Flush(rocksdb::FlushOptions());
     // rocksdb::CompactRangeOptions options;
     // _db->CompactRange(options, nullptr, nullptr);
 }
@@ -581,12 +697,9 @@ const rocksdb::Snapshot* RocksRecoveryUnit::snapshot() {
 rocksdb::Status RocksRecoveryUnit::Get(const rocksdb::Slice& key, std::string* value) {
     if (_writeBatch.GetWriteBatch()->Count() > 0) {
         std::unique_ptr<rocksdb::WBWIIterator> wb_iterator(_writeBatch.NewIterator());
-        auto keyString = std::string(key.data(), key.size());
-        keyString.append(sizeof(uint64_t), '\0');
-        auto keyWithTimestamp = rocksdb::Slice(keyString);
         wb_iterator->SeekToLast();
-        wb_iterator->SeekForPrev(keyWithTimestamp);
-        if (wb_iterator->Valid() && wb_iterator->Entry().key == keyWithTimestamp) {
+        wb_iterator->SeekForPrev(key);
+        if (wb_iterator->Valid() && wb_iterator->Entry().key == key) {
             const auto& entry = wb_iterator->Entry();
             if (entry.type == rocksdb::WriteType::kDeleteRecord) {
                 return rocksdb::Status::NotFound();
@@ -601,7 +714,7 @@ rocksdb::Status RocksRecoveryUnit::Get(const rocksdb::Slice& key, std::string* v
     std::string timestamp = getReadTimestamp();
     rocksdb::Slice readTimestamp(timestamp);
     uint64_t ts_ull = endian::bigToNative(*reinterpret_cast<const uint64_t*>(timestamp.data()));
-    log() << "Get " << key.ToString(true) << " snapshot " << options.snapshot->GetSequenceNumber()
+    TRACE << "Get " << key.ToString(true) << " snapshot " << options.snapshot->GetSequenceNumber()
           << " at ts: " << Timestamp(ts_ull);
     options.timestamp = &readTimestamp;
 
@@ -618,7 +731,7 @@ RocksIterator* RocksRecoveryUnit::NewIterator(std::string prefix, bool isOplog) 
 
     uint64_t ts_ull = endian::bigToNative(*reinterpret_cast<const uint64_t*>(timestamp.data()));
 
-    log() << "NewIterator at snapshot " << options.snapshot->GetSequenceNumber()
+    TRACE << "NewIterator at snapshot " << options.snapshot->GetSequenceNumber()
           << " and timestamp " << Timestamp(ts_ull);
     options.timestamp = timestampSlice.get();
     auto iterator = _writeBatch.NewIteratorWithBase(_db->NewIterator(options));
@@ -697,7 +810,7 @@ const rocksdb::Comparator* TimestampComparator() {
  * has been set.
  */
 Status RocksRecoveryUnit::setTimestamp(Timestamp timestamp) {
-    log() << "SetTimestamp " << timestamp;
+    TRACE << "SetTimestamp " << timestamp;
     LOG(3) << "RocksDb set timestamp of future write operations to " << timestamp;
     invariant(_prepareTimestamp.isNull());
     invariant(_commitTimestamp.isNull(),
@@ -715,7 +828,7 @@ Status RocksRecoveryUnit::setTimestamp(Timestamp timestamp) {
 }
 
 void RocksRecoveryUnit::setCommitTimestamp(Timestamp timestamp) {
-    log() << "SetCommitTimestamp " << timestamp;
+    TRACE << "SetCommitTimestamp " << timestamp;
     // This can be called either outside of a WriteUnitOfWork or in a prepared transaction after
     // setPrepareTimestamp() is called. Prepared transactions ensure the correct timestamping
     // semantics and the set-once commitTimestamp behavior is exactly what prepared transactions
@@ -809,4 +922,6 @@ std::string RocksRecoveryUnit::getReadTimestamp() {
 
     return encodeTimestamp(timestamp.get().asULL());
 }
+
+
 }  // namespace mongo

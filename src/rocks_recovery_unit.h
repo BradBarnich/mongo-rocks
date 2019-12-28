@@ -92,11 +92,13 @@ public:
     }
 
     int CompareWithoutTimestamp(const rocksdb::Slice& a, const rocksdb::Slice& b) const override {
-        // if(a.size() > b.size() && a.size() - b.size() == 8 && b[b.size()-1] != '\0' && b[b.size()-1] != '\xff' ) {
+        // if(a.size() > b.size() && a.size() - b.size() == 8 && b[b.size()-1] != '\0' &&
+        // b[b.size()-1] != '\xff' ) {
         //     //breakpoint();
         // }
-        if(b.size() > a.size() && b.size() - a.size() == 8 && a[a.size()-1] != '\0' && a[a.size()-1] != '\xff') {
-            //breakpoint();
+        if (b.size() > a.size() && b.size() - a.size() == 8 && a[a.size() - 1] != '\0' &&
+            a[a.size() - 1] != '\xff') {
+            // breakpoint();
         }
         if (a.size() < timestamp_size() || b.size() < timestamp_size()) {
             breakpoint();
@@ -144,9 +146,9 @@ public:
         return 0;
     }
 
-    // bool Equal(const rocksdb::Slice& a, const rocksdb::Slice& b) const override {
-    //   return CompareWithoutTimestamp(a, b) == 0;
-    // }
+    int CompareKey(const rocksdb::Slice& a, const rocksdb::Slice& b) const override {
+        return cmp_without_ts_->Compare(a, b);
+    }
 };
 
 // Same as rocksdb::Iterator, but adds couple more useful functions
@@ -346,7 +348,6 @@ private:
     std::shared_ptr<RocksSnapshotManager::SnapshotHolder> _snapshotHolder;
 
     boost::optional<Timestamp> _readFromMajorityCommittedSnapshot;
-    bool _areWriteUnitOfWorksBanned = false;
 
     std::vector<std::string> _timestamps;
 

@@ -65,6 +65,16 @@
 #include "rocks_recovery_unit.h"
 #include "rocks_util.h"
 
+#define TRACING_ENABLED 1
+
+#if TRACING_ENABLED
+#define TRACE log()
+#else
+#define TRACE \
+    if (0)    \
+    log()
+#endif
+
 namespace mongo {
 
 static int64_t cappedMaxSizeSlackFromSize(int64_t cappedMaxSize) {
@@ -405,7 +415,7 @@ void RocksRecordStore::deleteRecord(OperationContext* opCtx, const RecordId& dl)
     }
 
     std::string oldValue;
-    // log() << "delete: " << dl;
+    // TRACE << "delete: " << dl;
     auto status = ru->Get(key, &oldValue);
     invariantRocksOK(status);
     int oldLength = oldValue.size();
@@ -428,7 +438,7 @@ long long RocksRecordStore::numRecords(OperationContext* opCtx) const {
     RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
     auto numRecords = _numRecords.load();
     auto delta = ru->getDeltaCounter(_numRecordsKey);
-    // log() << "num:" << numRecords << " delta:" << delta;
+    // TRACE << "num:" << numRecords << " delta:" << delta;
     auto sum = numRecords + delta;
     if (sum < 0)
         return 0LL;
@@ -599,7 +609,7 @@ int64_t RocksRecordStore::cappedDeleteAsNeeded_inlock(OperationContext* opCtx,
                 }
             }
 
-            // log() << "capped delete: " << newestOld;
+            // TRACE << "capped delete: " << newestOld;
 
             ru->Delete(key);
             if (_isOplog) {
@@ -731,7 +741,7 @@ StatusWith<RecordId> RocksRecordStore::insertRecord(OperationContext* opCtx,
         fassert(59001, opCtx->recoveryUnit()->setTimestamp(timestamp));
     }
 
-    log() << "insert: " << loc;
+    TRACE << "insert: " << loc;
 
     // No need to register the write here, since we just allocated a new RecordId so no other
     // transaction can access this key before we commit
@@ -765,7 +775,7 @@ Status RocksRecordStore::updateRecord(OperationContext* opCtx,
 
     int old_length = old_value.size();
 
-    log() << "update: " << loc;
+    TRACE << "update: " << loc;
     ru->Put(key, rocksdb::Slice(data, len));
     if (_isOplog) {
         _oplogKeyTracker->insertKey(ru, loc, len);
@@ -853,8 +863,10 @@ Status RocksRecordStore::oplogDiskLocRegister(OperationContext* opCtx,
                                               const Timestamp& opTime,
                                               bool orderedCommit) {
     invariant(_isOplog);
+
     StatusWith<RecordId> record = oploghack::keyForOptime(opTime);
-    if (record.isOK()) {
+
+    if (record.isOK() && opCtx->recoveryUnit()->inActiveTxn()) {
         _cappedVisibilityManager->addUncommittedRecord(opCtx, record.getValue());
     }
 
@@ -1186,7 +1198,7 @@ boost::optional<Record> RocksRecordStore::Cursor::next() {
         }
     }
     if (iter->Valid()) {
-        log() << "iter next: " << iter->key().ToString(true);
+        TRACE << "iter next: " << iter->key().ToString(true);
     }
 
 

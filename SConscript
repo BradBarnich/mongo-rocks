@@ -67,6 +67,7 @@ env.Library(
         'src/rocks_init.cpp',
         'src/rocks_options_init.cpp',
         'src/rocks_parameters.cpp',
+        #'src/rocks_record_store_mongod.cpp',
         'src/rocks_server_status.cpp',
         'src/rocks_stats_parser.cpp',
         ],

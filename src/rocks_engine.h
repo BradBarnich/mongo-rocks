@@ -233,7 +233,7 @@ public:
 
     RocksCompactionScheduler* getCompactionScheduler() const {
         return _compactionScheduler.get();
-    }
+        }
 
     int getMaxWriteMBPerSec() const {
         return _maxWriteMBPerSec;

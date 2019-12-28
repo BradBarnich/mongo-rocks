@@ -55,7 +55,7 @@
 #include "rocks_recovery_unit.h"
 #include "rocks_util.h"
 
-#define TRACING_ENABLED 0
+#define TRACING_ENABLED 1
 
 #if TRACING_ENABLED
 #define TRACE_CURSOR log() << "Rocks index"
@@ -288,11 +288,17 @@ protected:
         dassert(!_id.isNull());
 
         BSONObj bson;
-        if (TRACING_ENABLED || (parts & kWantKey)) {
+        if (parts & kWantKey) {
             bson =
                 KeyString::toBson(_key.getBuffer(), _key.getSize(), _idx.getOrdering(), _typeBits);
+        }
 
-            TRACE_CURSOR << " returning " << bson << ' ' << _id;
+        // don't change bson when tracing, causes test failures.
+        if (TRACING_ENABLED) {
+            TRACE_CURSOR << " returning "
+                         << KeyString::toBson(
+                                _key.getBuffer(), _key.getSize(), _idx.getOrdering(), _typeBits)
+                         << ' ' << _id;
         }
 
         return {{std::move(bson), _id}};
@@ -344,10 +350,7 @@ protected:
         auto* iter = iterator();
         auto keyString = std::string(query.getBuffer(), query.getSize());
         const rocksdb::Slice keySlice(keyString);
-        auto keyWithTimestamp = std::string(query.getBuffer(), query.getSize());
-        // keyWithTimestamp.append(sizeof(uint64_t), '\xff');
-        const rocksdb::Slice keySliceWithTimestamp(keyWithTimestamp);
-        iter->Seek(keySliceWithTimestamp);
+        iter->Seek(keySlice);
         if (!_updateOnIteratorValidity()) {
             if (!_forward) {
                 // this will give lower bound behavior for backwards
@@ -1049,6 +1052,7 @@ Status RocksUniqueIndex::_insertTimestampUnsafe(OperationContext* opCtx,
         // nothing here. just insert the value
         rocksdb::Slice valueSlice(value.getBuffer(), value.getSize());
         ru->Put(keySlice, valueSlice);
+
 
         // rocksdb: manually track size
         _indexStorageSize.fetch_add(static_cast<long long>(prefixedKey.size() + value.getSize()),

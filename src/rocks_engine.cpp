@@ -236,7 +236,6 @@ RocksEngine::RocksEngine(const std::string& path, bool durable, int formatVersio
             invariantRocksOK(iter->status());
             rocksdb::Slice ident(iter->key());
             ident.remove_prefix(kMetadataPrefix.size());
-            ident.remove_suffix(sizeof(uint64_t));
             // this could throw DBException, which then means DB corruption. We just let it fly
             // to the caller
             BSONObj identConfig(iter->value().data());
@@ -461,6 +460,7 @@ Status RocksEngine::dropIdent(OperationContext* opCtx, StringData ident) {
 bool RocksEngine::hasIdent(OperationContext* opCtx, StringData ident) const {
     stdx::lock_guard<Latch> lk(_identMapMutex);
     return _identMap.find(ident) != _identMap.end();
+    ;
 }
 
 std::vector<std::string> RocksEngine::getAllIdents(OperationContext* opCtx) const {
@@ -636,6 +636,8 @@ rocksdb::Options RocksEngine::_options() const {
     options.compression_per_level[2] = rocksdb::kLZ4Compression;
     options.bottommost_compression = rocksdb::kZSTD;
     options.compaction_readahead_size = 1 * 1024 * 1024;  // 1MB
+
+    options.preserve_deletes = true;
 
     options.statistics = _statistics;
 
