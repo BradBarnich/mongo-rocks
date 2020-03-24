@@ -90,7 +90,7 @@ public:
 
             Lock::CollectionLock collectionLock(opCtx.get(), _ns, MODE_IX);
             Collection* collection =
-                CollectionCatalog::get(opCtx.get()).lookupCollectionByNamespace(_ns);
+                CollectionCatalog::get(opCtx.get()).lookupCollectionByNamespace(opCtx.get(), _ns);
             if (!collection) {
                 LOG(2) << "no collection " << _ns;
                 return 0;

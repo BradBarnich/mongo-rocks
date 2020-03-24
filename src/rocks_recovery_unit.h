@@ -133,8 +133,15 @@ public:
         assert(ts1.size() == ts2.size());
         uint64_t high1 = 0;
         uint64_t high2 = 0;
-        auto* ptr1 = const_cast<rocksdb::Slice*>(&ts1);
-        auto* ptr2 = const_cast<rocksdb::Slice*>(&ts2);
+        const size_t kSize = ts1.size();
+        std::unique_ptr<char[]> ts1_buf(new char[kSize]);
+        memcpy(ts1_buf.get(), ts1.data(), ts1.size());
+        std::unique_ptr<char[]> ts2_buf(new char[kSize]);
+        memcpy(ts2_buf.get(), ts2.data(), ts2.size());
+        rocksdb::Slice ts1_copy = rocksdb::Slice(ts1_buf.get(), kSize);
+        rocksdb::Slice ts2_copy = rocksdb::Slice(ts2_buf.get(), kSize);
+        auto* ptr1 = const_cast<rocksdb::Slice*>(&ts1_copy);
+        auto* ptr2 = const_cast<rocksdb::Slice*>(&ts2_copy);
         if (!GetFixed64(ptr1, &high1) || !GetFixed64(ptr2, &high2)) {
             assert(false);
         }
@@ -146,9 +153,9 @@ public:
         return 0;
     }
 
-    int CompareKey(const rocksdb::Slice& a, const rocksdb::Slice& b) const override {
-        return cmp_without_ts_->Compare(a, b);
-    }
+    // int CompareKey(const rocksdb::Slice& a, const rocksdb::Slice& b) const override {
+    //     return cmp_without_ts_->Compare(a, b);
+    // }
 };
 
 // Same as rocksdb::Iterator, but adds couple more useful functions

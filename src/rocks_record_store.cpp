@@ -769,11 +769,11 @@ Status RocksRecordStore::updateRecord(OperationContext* opCtx,
         throw WriteConflictException();
     }
 
-    std::string old_value;
-    auto status = ru->Get(key, &old_value);
-    invariantRocksOK(status);
+    // std::string old_value;
+    // auto status = ru->Get(key, &old_value);
+    // invariantRocksOK(status);
 
-    int old_length = old_value.size();
+    // int old_length = old_value.size();
 
     TRACE << "update: " << loc;
     ru->Put(key, rocksdb::Slice(data, len));
@@ -781,7 +781,7 @@ Status RocksRecordStore::updateRecord(OperationContext* opCtx,
         _oplogKeyTracker->insertKey(ru, loc, len);
     }
 
-    _increaseDataSize(opCtx, len - old_length);
+    // _increaseDataSize(opCtx, len - old_length);
 
     cappedDeleteAsNeeded(opCtx, loc);
 

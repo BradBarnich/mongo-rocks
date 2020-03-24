@@ -423,7 +423,7 @@ std::unique_ptr<SortedDataInterface> RocksEngine::getSortedDataInterface(
 }
 
 // cannot be rolled back
-Status RocksEngine::dropIdent(OperationContext* opCtx, StringData ident) {
+Status RocksEngine::dropIdent(OperationContext* opCtx, RecoveryUnit* ru, StringData ident) {
     auto config = _tryGetIdentConfig(ident);
     // happens rarely when dropped prefix markers are persisted but metadata changes
     // are lost due to system crash on standalone with default acknowledgement behavior

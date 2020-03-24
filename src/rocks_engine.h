@@ -102,7 +102,7 @@ public:
     std::unique_ptr<SortedDataInterface> getSortedDataInterface(
         OperationContext* opCtx, StringData ident, const IndexDescriptor* desc) override;
 
-    Status dropIdent(OperationContext* opCtx, StringData ident) override;
+    Status dropIdent(OperationContext* opCtx, RecoveryUnit* ru, StringData ident) override;
 
     bool hasIdent(OperationContext* opCtx, StringData ident) const override;
 
@@ -233,7 +233,7 @@ public:
 
     RocksCompactionScheduler* getCompactionScheduler() const {
         return _compactionScheduler.get();
-        }
+    }
 
     int getMaxWriteMBPerSec() const {
         return _maxWriteMBPerSec;

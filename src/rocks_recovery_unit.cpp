@@ -75,6 +75,7 @@ class PrefixStrippingIterator : public RocksIterator {
 public:
     // baseIterator is consumed
     PrefixStrippingIterator(std::string prefix,
+                            std::string nextPrefix,
                             Iterator* baseIterator,
                             RocksCompactionScheduler* compactionScheduler,
                             std::unique_ptr<rocksdb::Slice> upperBound,
@@ -82,7 +83,7 @@ public:
                             std::unique_ptr<rocksdb::Slice> timestampSlice)
         : _rocksdbSkippedDeletionsInitial(0),
           _prefix(std::move(prefix)),
-          _nextPrefix(rocksGetNextPrefix(_prefix)),
+          _nextPrefix(std::move(nextPrefix)),
           _prefixSlice(_prefix),
           _prefixEpsilon(_prefix),
           _baseIterator(baseIterator),
@@ -93,8 +94,8 @@ public:
 
         _prefixEpsilon.append(1, '\0');
         _prefixSliceEpsilon = rocksdb::Slice(_prefixEpsilon);
-        *_upperBound.get() = rocksdb::Slice(_nextPrefix);
-        *_timestampSlice.get() = rocksdb::Slice(_timestamp);
+        // *_upperBound.get() = rocksdb::Slice(_nextPrefix);
+        // *_timestampSlice.get() = rocksdb::Slice(_timestamp);
     }
     ~PrefixStrippingIterator() {}
 
@@ -159,9 +160,9 @@ public:
     virtual rocksdb::Slice value() const {
         return _baseIterator->value();
     }
-    virtual rocksdb::Slice timestamp() const {
-        return _baseIterator->timestamp();
-    }
+    // virtual rocksdb::Slice timestamp() const {
+    //     return _baseIterator->timestamp();
+    // }
     virtual rocksdb::Status status() const {
         return _baseIterator->status();
     }
@@ -262,7 +263,8 @@ public:
         return rocksdb::Status::OK();
     }
 
-    rocksdb::Status MergeCF(uint32_t, const rocksdb::Slice& key, const rocksdb::Slice&) override {
+    rocksdb::Status MergeCF(uint32_t, const rocksdb::Slice& key, const rocksdb::Slice&) override
+    {
         return rocksdb::Status::OK();
     }
 
@@ -296,7 +298,9 @@ private:
         }
 
         rocksdb::ReadOptions options;
-        options.snapshot = _snapshot;
+        if(_snapshot != nullptr) {
+            options.snapshot = _snapshot;
+        }
         options.timestamp = &kMaxSlice;
         std::unique_ptr<rocksdb::Iterator> iterator(_db->NewIterator(options));
         std::string keyWithoutTimestamp(key.data(), key.size() - sizeof(uint64_t));
@@ -309,14 +313,14 @@ private:
 
             uint64_t ts_ull;
             ts_ull = endian::bigToNative(
-                *reinterpret_cast<const uint64_t*>(iterator->timestamp().data()));
+                *reinterpret_cast<const uint64_t*>(iterator->utimestamp().data()));
 
             TRACE << "put: " << key.ToString(true)
                   << " without timestamp, using existing: " << Timestamp(ts_ull);
 
 
             char* ptr = const_cast<char*>(key.data() + key.size() - sizeof(uint64_t));
-            memcpy(ptr, iterator->timestamp().data(), sizeof(uint64_t));
+            memcpy(ptr, iterator->utimestamp().data(), sizeof(uint64_t));
         } else {
             TRACE << "put: " << key.ToString(true)
                   << " without timestamp, doesn't exist. no change.";
@@ -370,11 +374,11 @@ RocksRecoveryUnit::~RocksRecoveryUnit() {
 }
 
 void RocksRecoveryUnit::beginUnitOfWork(OperationContext* opCtx) {
-    invariant(!_inUnitOfWork(), toString(_getState()));
+    invariant(!_inUnitOfWork(), toString(getState()));
     invariant(!_isCommittingOrAborting(),
               str::stream() << "cannot begin unit of work while commit or rollback handlers are "
                                "running: "
-                            << toString(_getState()));
+                            << toString(getState()));
     _setState(_isActive() ? State::kActive : State::kInactiveInUnitOfWork);
     _opCtx = opCtx;
     TRACE << "begin uow";
@@ -382,7 +386,7 @@ void RocksRecoveryUnit::beginUnitOfWork(OperationContext* opCtx) {
 
 void RocksRecoveryUnit::doCommitUnitOfWork() {
     TRACE << "commit uow";
-    invariant(_inUnitOfWork(), toString(_getState()));
+    invariant(_inUnitOfWork(), toString(getState()));
 
     // Since we cannot have both a _lastTimestampSet and a _commitTimestamp, we set the
     // commit time as whichever is non-empty. If both are empty, then _lastTimestampSet will
@@ -400,7 +404,7 @@ void RocksRecoveryUnit::doCommitUnitOfWork() {
 
 void RocksRecoveryUnit::doAbortUnitOfWork() {
     TRACE << "abort uow";
-    invariant(_inUnitOfWork(), toString(_getState()));
+    invariant(_inUnitOfWork(), toString(getState()));
     _abort();
 }
 
@@ -410,7 +414,7 @@ bool RocksRecoveryUnit::waitUntilDurable(OperationContext* opCtx) {
 }
 
 void RocksRecoveryUnit::doAbandonSnapshot() {
-    invariant(!_inUnitOfWork(), toString(_getState()));
+    invariant(!_inUnitOfWork(), toString(getState()));
     _deltaCounters.clear();
     _writeBatch.Clear();
     _timestamps.clear();
@@ -504,16 +508,21 @@ void RocksRecoveryUnit::TruncatePrefix(std::string prefix) {
     // TRACE << "delete range: " << prefixRange.start.ToString(true) << " - " <<
     // prefixRange.limit.ToString(true);
 
-    invariantRocksOK(_writeBatch.DeleteRange(prefixRange.start, prefixRange.limit));
+    // invariantRocksOK(_writeBatch.DeleteRange(prefixRange.start, prefixRange.limit));
 
-    if (_commitTimestamp.isNull()) {
-        _timestamps.push_back(encodeTimestamp(UINT64_MAX));
-    }
+    // if (_commitTimestamp.isNull()) {
+    //     _timestamps.push_back(encodeTimestamp(UINT64_MAX));
+    // }
 
-    // return _db->DeleteRange(
-    //     writeOptions,
-    //     _db->DefaultColumnFamily(),
-    //     prefixRange.start, prefixRange.limit);
+    rocksdb::WriteOptions writeOptions;
+    auto timestamp = encodeTimestamp(UINT64_MAX);
+    auto writeTs = rocksdb::Slice(timestamp.data(), timestamp.size());
+    writeOptions.timestamp = &writeTs;
+
+    _db->DeleteRange(
+        writeOptions,
+        _db->DefaultColumnFamily(),
+        prefixRange.start, prefixRange.limit);
 }
 
 void RocksRecoveryUnit::setOplogReadTill(const RecordId& record) {
@@ -565,6 +574,8 @@ boost::optional<Timestamp> RocksRecoveryUnit::getPointInTimeReadTimestamp() {
         case ReadSource::kAllDurableSnapshot:
             MONGO_UNREACHABLE;
     }
+
+    return boost::none;
 }
 
 void RocksRecoveryUnit::_releaseSnapshot() {
@@ -620,7 +631,7 @@ void RocksRecoveryUnit::_commit(boost::optional<Timestamp> commitTime) {
                 }
             }
             wb->AssignTimestamps(timestampSlices);
-            ConsistentTimestampUsage handler(_db, snapshot());
+            ConsistentTimestampUsage handler(_db, _snapshot);
             wb->Iterate(&handler);
         } else {
             TRACE << "commit: setting unspecified timestamp to (commit) " << _commitTimestamp;
@@ -650,8 +661,7 @@ void RocksRecoveryUnit::_commit(boost::optional<Timestamp> commitTime) {
     _isTimestamped = false;
     _mustBeTimestamped = false;
 
-    // this started causing a crash
-    _db->Flush(rocksdb::FlushOptions());
+    // _db->Flush(rocksdb::FlushOptions());
     // rocksdb::CompactRangeOptions options;
     // _db->CompactRange(options, nullptr, nullptr);
 }
@@ -722,20 +732,22 @@ rocksdb::Status RocksRecoveryUnit::Get(const rocksdb::Slice& key, std::string* v
 }
 
 RocksIterator* RocksRecoveryUnit::NewIterator(std::string prefix, bool isOplog) {
-    std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
-    std::unique_ptr<rocksdb::Slice> timestampSlice(new rocksdb::Slice());
-    std::string timestamp = getReadTimestamp();
+    auto nextPrefix = rocksGetNextPrefix(prefix);
+    auto timestamp = getReadTimestamp();
+    std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice(nextPrefix));
+    std::unique_ptr<rocksdb::Slice> timestampSlice(new rocksdb::Slice(timestamp));
+
     rocksdb::ReadOptions options;
     options.iterate_upper_bound = upperBound.get();
+    options.timestamp = timestampSlice.get();
     options.snapshot = snapshot();
 
     uint64_t ts_ull = endian::bigToNative(*reinterpret_cast<const uint64_t*>(timestamp.data()));
-
     TRACE << "NewIterator at snapshot " << options.snapshot->GetSequenceNumber()
           << " and timestamp " << Timestamp(ts_ull);
-    options.timestamp = timestampSlice.get();
+
     auto iterator = _writeBatch.NewIteratorWithBase(_db->NewIterator(options));
-    auto prefixIterator = new PrefixStrippingIterator(std::move(prefix),
+    auto prefixIterator = new PrefixStrippingIterator(std::move(prefix), std::move(nextPrefix),
                                                       iterator,
                                                       isOplog ? nullptr : _compactionScheduler,
                                                       std::move(upperBound),
@@ -745,14 +757,17 @@ RocksIterator* RocksRecoveryUnit::NewIterator(std::string prefix, bool isOplog) 
 }
 
 RocksIterator* RocksRecoveryUnit::NewIteratorNoSnapshot(rocksdb::DB* db, std::string prefix) {
-    std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
-    std::unique_ptr<rocksdb::Slice> timestampSlice(new rocksdb::Slice());
-    std::string timestamp(encodeTimestamp(ULLONG_MAX));
+    auto nextPrefix = rocksGetNextPrefix(prefix);
+    auto timestamp(encodeTimestamp(ULLONG_MAX));
+    std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice(nextPrefix));
+    std::unique_ptr<rocksdb::Slice> timestampSlice(new rocksdb::Slice(timestamp));
+
     rocksdb::ReadOptions options;
     options.iterate_upper_bound = upperBound.get();
     options.timestamp = timestampSlice.get();
+
     auto iterator = db->NewIterator(options);
-    return new PrefixStrippingIterator(std::move(prefix),
+    return new PrefixStrippingIterator(std::move(prefix), std::move(nextPrefix),
                                        iterator,
                                        nullptr,
                                        std::move(upperBound),
@@ -833,7 +848,7 @@ void RocksRecoveryUnit::setCommitTimestamp(Timestamp timestamp) {
     // setPrepareTimestamp() is called. Prepared transactions ensure the correct timestamping
     // semantics and the set-once commitTimestamp behavior is exactly what prepared transactions
     // want.
-    invariant(!_inUnitOfWork() || !_prepareTimestamp.isNull(), toString(_getState()));
+    invariant(!_inUnitOfWork() || !_prepareTimestamp.isNull(), toString(getState()));
     invariant(_commitTimestamp.isNull(),
               str::stream() << "Commit timestamp set to " << _commitTimestamp.toString()
                             << " and trying to set it to " << timestamp.toString());

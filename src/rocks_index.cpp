@@ -59,7 +59,7 @@
 
 #if TRACING_ENABLED
 #define TRACE_CURSOR log() << "Rocks index"
-#define TRACE_INDEX log() << "Rocks index (" << (const void*)this << ") "
+#define TRACE_INDEX log() << "Rocks index"
 #else
 #define TRACE_CURSOR \
     if (0)           \
