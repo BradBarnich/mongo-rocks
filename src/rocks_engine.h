@@ -116,7 +116,7 @@ public:
         return false;
     }
 
-    int flushAllFiles(OperationContext* opCtx, bool sync) override;
+    void flushAllFiles(OperationContext* opCtx, bool sync) override;
 
     Status beginBackup(OperationContext* opCtx) override;
 

@@ -26,7 +26,7 @@
  *    it in the license file.
  */
 
-#define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
+#define MONGO_LOGV2_DEFAULT_COMPONENT ::mongo::logv2::LogComponent::kStorage
 
 #include "mongo/platform/basic.h"
 
@@ -40,7 +40,6 @@
 #include "mongo/util/assert_util.h"
 #include "mongo/util/background.h"
 #include "mongo/util/concurrency/idle_thread_block.h"
-#include "mongo/util/log.h"
 #include "rocks_util.h"
 
 #include <rocksdb/compaction_filter.h>

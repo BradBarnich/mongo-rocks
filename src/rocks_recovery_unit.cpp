@@ -26,7 +26,7 @@
  *    it in the license file.
  */
 
-#define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
+#define MONGO_LOGV2_DEFAULT_COMPONENT ::mongo::logv2::LogComponent::kStorage
 
 #include "mongo/platform/basic.h"
 
@@ -48,8 +48,8 @@
 #include "mongo/db/operation_context.h"
 #include "mongo/db/server_options.h"
 #include "mongo/db/storage/journal_listener.h"
+#include "mongo/logv2/log.h"
 #include "mongo/util/debugger.h"
-#include "mongo/util/log.h"
 
 #include "rocks_transaction.h"
 #include "rocks_util.h"
@@ -69,7 +69,7 @@
 namespace mongo {
 namespace {
 
-logger::LogSeverity kSlowTransactionSeverity = logger::LogSeverity::Debug(1);
+logv2::LogSeverity kSlowTransactionSeverity = logv2::LogSeverity::Debug(1);
 
 class PrefixStrippingIterator : public RocksIterator {
 public:
@@ -263,8 +263,7 @@ public:
         return rocksdb::Status::OK();
     }
 
-    rocksdb::Status MergeCF(uint32_t, const rocksdb::Slice& key, const rocksdb::Slice&) override
-    {
+    rocksdb::Status MergeCF(uint32_t, const rocksdb::Slice& key, const rocksdb::Slice&) override {
         return rocksdb::Status::OK();
     }
 
@@ -298,7 +297,7 @@ private:
         }
 
         rocksdb::ReadOptions options;
-        if(_snapshot != nullptr) {
+        if (_snapshot != nullptr) {
             options.snapshot = _snapshot;
         }
         options.timestamp = &kMaxSlice;
@@ -520,9 +519,7 @@ void RocksRecoveryUnit::TruncatePrefix(std::string prefix) {
     writeOptions.timestamp = &writeTs;
 
     _db->DeleteRange(
-        writeOptions,
-        _db->DefaultColumnFamily(),
-        prefixRange.start, prefixRange.limit);
+        writeOptions, _db->DefaultColumnFamily(), prefixRange.start, prefixRange.limit);
 }
 
 void RocksRecoveryUnit::setOplogReadTill(const RecordId& record) {
@@ -747,7 +744,8 @@ RocksIterator* RocksRecoveryUnit::NewIterator(std::string prefix, bool isOplog) 
           << " and timestamp " << Timestamp(ts_ull);
 
     auto iterator = _writeBatch.NewIteratorWithBase(_db->NewIterator(options));
-    auto prefixIterator = new PrefixStrippingIterator(std::move(prefix), std::move(nextPrefix),
+    auto prefixIterator = new PrefixStrippingIterator(std::move(prefix),
+                                                      std::move(nextPrefix),
                                                       iterator,
                                                       isOplog ? nullptr : _compactionScheduler,
                                                       std::move(upperBound),
@@ -767,7 +765,8 @@ RocksIterator* RocksRecoveryUnit::NewIteratorNoSnapshot(rocksdb::DB* db, std::st
     options.timestamp = timestampSlice.get();
 
     auto iterator = db->NewIterator(options);
-    return new PrefixStrippingIterator(std::move(prefix), std::move(nextPrefix),
+    return new PrefixStrippingIterator(std::move(prefix),
+                                       std::move(nextPrefix),
                                        iterator,
                                        nullptr,
                                        std::move(upperBound),
